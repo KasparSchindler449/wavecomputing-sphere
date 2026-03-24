@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<!--
+  WaveComputing.org — Cortical Eigenmode Teaser
+  ──────────────────────────────────────────────
+  GitHub Pages URL:
+  https://kasparschindler449.github.io/wavecomputing-sphere/wavecomputing_teaser.html
+
+  Key improvements in this version:
+  · Dynamic FOV  — sphere always fits fully inside the frame at ANY aspect ratio
+  · Starfield    — 1800 distant stars for deep-space atmosphere
+  · Darker darks — zero crossing is true black; blue side is deep midnight
+  · Limb darkening — sphere edge fades to near-black, enhancing the floating feel
+  · Stronger contrast — gold peaks brighter, inhibitory zones deeper
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveComputing</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  min-height: 100vh;
+  background: #000000;
+  overflow: hidden;
+}
+canvas {
+  display: block;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw;
+  height: 100vh;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── Renderer ───────────────────────────────────────────────────────────────
+const canvas   = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2.5));
+renderer.setClearColor(0x000000, 1);
+
+const scene  = new THREE.Scene();
+
+// Camera constants — FOV is computed dynamically in onResize()
+const CAM_Z = 6.8;    // camera distance from origin
+const FIT_R = 2.30;   // effective radius to guarantee fully in frame (sphere 1.52 + halos + margin)
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
+camera.position.z = CAM_Z;
+
+// ── Starfield ──────────────────────────────────────────────────────────────
+(function buildStars() {
+  const N   = 1800;
+  const pos = new Float32Array(N * 3);
+  const col = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const theta = Math.random() * 2 * Math.PI;
+    const phi   = Math.acos(2 * Math.random() - 1);
+    const r     = 55 + Math.random() * 40;
+    pos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+    pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    pos[i*3+2] = r * Math.cos(phi);
+    // Slight colour variance: cool blue-white
+    col[i*3]   = 0.52 + Math.random() * 0.38;
+    col[i*3+1] = 0.54 + Math.random() * 0.36;
+    col[i*3+2] = 0.62 + Math.random() * 0.38;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({
+    vertexColors:    true,
+    size:            0.048,
+    transparent:     true,
+    opacity:         0.58,
+    sizeAttenuation: true,
+  })));
+})();
+
+// ── Vertex shader ──────────────────────────────────────────────────────────
+const vertShader = /* glsl */`
+  varying vec3 vN;
+  varying vec3 vVN;
+  void main() {
+    vN  = normalize(normal);
+    vVN = normalize(normalMatrix * normal);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// ── Fragment shader ────────────────────────────────────────────────────────
+const fragShader = /* glsl */`
+  precision highp float;
+  varying vec3 vN;
+  varying vec3 vVN;
+  uniform float u_t;
+
+  // Colormap: deep midnight-blue (inhibition) -> true black (zero) -> copper -> gold -> bright amber (excitation)
+  // Power curves keep near-zero values truly black — no ambient grey wash.
+  vec3 cmap(float t) {
+    t = clamp(t, -1.0, 1.0);
+
+    if (t < 0.0) {
+      // Negative: deep midnight navy. Power curve keeps darks very dark.
+      float s = pow(-t, 0.62);
+      return vec3(s*0.01, s*0.04, s*0.70);
+    }
+    if (t < 0.30) {
+      // Near-zero positive: black -> barely visible dark copper
+      float u = pow(t / 0.30, 1.8);
+      return vec3(u*0.34, u*0.11, u*0.01);
+    }
+    if (t < 0.64) {
+      // Copper -> rich gold
+      float u = (t - 0.30) / 0.34;
+      return vec3(0.34 + u*0.52, 0.11 + u*0.54, 0.01);
+    }
+    // Rich gold -> luminous warm amber-yellow
+    float u = (t - 0.64) / 0.36;
+    return vec3(0.86 + u*0.14, 0.65 + u*0.31, 0.01 + u*0.15);
+  }
+
+  void main() {
+    vec3  n = normalize(vN);
+    float x = n.x, y = n.y, z = n.z;
+
+    // Neural field connectivity kernel — σ drifts on ~76 s period
+    float sigma = 0.50 + 0.24 * sin(u_t * 0.0828);
+    float g0 = 1.0;
+    float g1 = exp(-1.0 * sigma * sigma);
+    float g2 = exp(-3.0 * sigma * sigma);
+    float g3 = exp(-6.0 * sigma * sigma);
+
+    // Dispersion: omega_l proportional to sqrt(l*(l+1))
+    float base = 0.195;
+    float w1 = base * 1.4142;
+    float w2 = base * 2.4495;
+    float w3 = base * 3.4641;
+
+    // Mode amplitudes with natural frequencies and random phases
+    float a00  = 0.88 * cos(0.11*u_t + 0.72);
+    float a1m  = 0.76 * cos(w1*u_t + 1.38);
+    float a10  = 0.69 * cos(w1*u_t + 2.51);
+    float a1p  = 0.82 * cos(w1*u_t + 0.18);
+    float a2mm = 0.58 * cos(w2*u_t + 3.14);
+    float a2m  = 0.65 * cos(w2*u_t + 0.93);
+    float a20  = 0.72 * cos(w2*u_t + 1.87);
+    float a2p  = 0.60 * cos(w2*u_t + 4.21);
+    float a2pp = 0.63 * cos(w2*u_t + 2.76);
+    float a3a  = 0.43 * cos(w3*u_t + 0.44);
+    float a3b  = 0.39 * cos(w3*u_t + 5.18);
+    float a3c  = 0.46 * cos(w3*u_t + 1.62);
+    float a3d  = 0.52 * cos(w3*u_t + 3.89);
+    float a3e  = 0.45 * cos(w3*u_t + 0.28);
+    float a3f  = 0.41 * cos(w3*u_t + 4.67);
+    float a3g  = 0.44 * cos(w3*u_t + 2.13);
+
+    // Real spherical harmonics Y_l^m (analytic, normalised)
+    float Y00  = 0.28209;
+    float Y1m1 = 0.48860 * y;
+    float Y10  = 0.48860 * z;
+    float Y11  = 0.48860 * x;
+    float Y2m2 = 1.09255 * x*y;
+    float Y2m1 = 1.09255 * y*z;
+    float Y20  = 0.31539 * (3.0*z*z - 1.0);
+    float Y21  = 1.09255 * x*z;
+    float Y22  = 0.54627 * (x*x - y*y);
+    float Y3m3 = 0.59004 * y*(3.0*x*x - y*y);
+    float Y3m2 = 2.89061 * x*y*z;
+    float Y3m1 = 0.45705 * y*(5.0*z*z - 1.0);
+    float Y30  = 0.37318 * z*(5.0*z*z - 3.0);
+    float Y31  = 0.45705 * x*(5.0*z*z - 1.0);
+    float Y32  = 1.44530 * z*(x*x - y*y);
+    float Y33  = 0.59004 * x*(x*x - 3.0*y*y);
+
+    // Neural field sum
+    float F =   g0 * a00 * Y00
+              + g1 * (a1m*Y1m1 + a10*Y10 + a1p*Y11)
+              + g2 * (a2mm*Y2m2 + a2m*Y2m1 + a20*Y20 + a2p*Y21 + a2pp*Y22)
+              + g3 * (a3a*Y3m3 + a3b*Y3m2 + a3c*Y3m1 + a3d*Y30
+                    + a3e*Y31  + a3f*Y32  + a3g*Y33);
+
+    // Tighter normalisation -> stronger colour saturation
+    F = clamp(F * 3.30, -1.0, 1.0);
+
+    vec3 col = cmap(F);
+
+    // Subtle directional shading
+    float diff = 0.93 + 0.07 * clamp(dot(n, normalize(vec3(0.4, 0.7, 1.0))), 0.0, 1.0);
+    col *= diff;
+
+    // Warm gold rim glow at the limb
+    float rimGlow = pow(1.0 - abs(vVN.z), 3.2);
+    col += rimGlow * vec3(0.20, 0.08, 0.0);
+
+    // Limb darkening — the critical ingredient for "floating in space".
+    // abs(vVN.z) = 1 at the centre facing us, 0 at the extreme edge.
+    // We darken the edge significantly so it dissolves into the black background.
+    float facing = abs(vVN.z);
+    float limb   = pow(facing, 0.36);   // slow fade — most of sphere stays bright
+    col *= (0.18 + 0.82 * limb);        // edge reaches down to 18% of centre brightness
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// ── Main sphere (160x160 segments for silhouette quality) ─────────────────
+const mat = new THREE.ShaderMaterial({
+  vertexShader:   vertShader,
+  fragmentShader: fragShader,
+  uniforms: { u_t: { value: 0.0 } },
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.52, 160, 160), mat));
+
+// ── Atmospheric halos ──────────────────────────────────────────────────────
+const makeHalo = (radius, power, alpha, r, g, b) => {
+  scene.add(new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 48, 48),
+    new THREE.ShaderMaterial({
+      vertexShader: `
+        varying vec3 vVN;
+        void main() {
+          vVN = normalize(normalMatrix * normal);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+        }`,
+      fragmentShader: `
+        precision mediump float;
+        varying vec3 vVN;
+        void main() {
+          float rim = 1.0 - abs(vVN.z);
+          float a = pow(rim, ${power.toFixed(1)}) * ${alpha.toFixed(2)};
+          gl_FragColor = vec4(${r.toFixed(2)},${g.toFixed(2)},${b.toFixed(2)}, a);
+        }`,
+      transparent: true,
+      blending:    THREE.AdditiveBlending,
+      side:        THREE.BackSide,
+      depthWrite:  false,
+    })
+  ));
+};
+
+makeHalo(1.78, 2.5, 0.44, 0.01, 0.04, 0.50);  // tight inner blue corona
+makeHalo(2.18, 1.5, 0.14, 0.01, 0.02, 0.32);  // wide soft outer halo
+
+// ── Resize — dynamic FOV so sphere ALWAYS fits any frame shape ─────────────
+// Three.js FOV is VERTICAL. For portrait / square frames the horizontal
+// dimension can become the tight constraint — we widen FOV to compensate.
+function onResize() {
+  const W = window.innerWidth  || 300;
+  const H = window.innerHeight || 300;
+  renderer.setSize(W, H, false);
+
+  const aspect = W / H;
+  camera.aspect = aspect;
+
+  // Compute the half-angle required so FIT_R fits in the smaller dimension
+  const halfRad = (aspect >= 1)
+    ? Math.atan(FIT_R / CAM_Z)                  // height is the tight dimension
+    : Math.atan(FIT_R / (aspect * CAM_Z));       // width is the tight dimension
+
+  camera.fov = 2 * halfRad * (180 / Math.PI);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+// ── Animation loop ─────────────────────────────────────────────────────────
+const sphereMesh = scene.children.find(c => c.isMesh && c.material === mat);
+let t = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  t += 0.016;
+  mat.uniforms.u_t.value = t;
+  if (sphereMesh) {
+    sphereMesh.rotation.y += 0.0016;
+    sphereMesh.rotation.x  = 0.14 + 0.04 * Math.sin(t * 0.031);
+  }
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
