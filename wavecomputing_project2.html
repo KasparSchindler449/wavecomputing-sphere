@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<!--
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  WaveComputing.org — Cortical Eigenmode Visualisation  (v3)                 ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║  WHAT'S NEW IN v3                                                            ║
+║    l = 5 modes added: 11 new harmonics (m = -5 … +5)                       ║
+║      Each l=5 mode has 5 nodal circles → fine filigree texture.             ║
+║    l = 6 modes added: 13 new harmonics (m = -6 … +6)                       ║
+║      Each l=6 mode has 6 nodal circles → the finest resolvable detail.      ║
+║    Total mode count: 1+3+5+7+9+11+13 = 49 spherical harmonics.             ║
+║    New precomputed Cartesian powers: x², y², xy, x²y², x²−y², z⁵, z⁶.    ║
+║    New kernel weights: g₅ = exp(−15σ²), g₆ = exp(−21σ²).                  ║
+║    New frequencies: l=5 → w=2.3 (n=23), l=6 → w=2.9 (n=29).              ║
+║    Normalisation scale 3.0 → 2.8 to absorb the extra modes gracefully.     ║
+║                                                                              ║
+║  NORMALISATION CONSTANTS — DERIVATION SUMMARY                               ║
+║    Formula:  N_l^m = √( (2l+1)/(4π) · (l−m)!/(l+m)! )                     ║
+║    Real forms: Y_l^{+m} = √2·N_l^m·P_l^m(cosθ)·cos(mφ)                   ║
+║               Y_l^{-m} = √2·N_l^m·P_l^m(cosθ)·sin(mφ)                   ║
+║    On the unit sphere: sin^n(θ)·cos(nφ) = Re[(x+iy)^n]                    ║
+║                        sin^n(θ)·sin(nφ) = Im[(x+iy)^n]                    ║
+║    Associated Legendre derivatives (no Condon-Shortley phase):              ║
+║      P_5: d¹→(15/8)(21z⁴−14z²+1)·sinθ  d²→52.5z(3z²−1)·sin²θ           ║
+║           d³→52.5(9z²−1)·sin³θ           d⁴→945z·sin⁴θ   d⁵→945·sin⁵θ  ║
+║      P_6: d¹→(21/8)z(33z⁴−30z²+5)      d²→(105/8)(33z⁴−18z²+1)         ║
+║           d³→(315/2)z(11z²−3)           d⁴→(945/2)(11z²−1)               ║
+║           d⁵→10395z                     d⁶→10395                          ║
+║                                                                              ║
+║  FREQUENCY TABLE (all = n × w_base = 0.1 → loop at T = 20π ≈ 62.83)       ║
+║    σ: n=1 w=0.1 | l=0: n=2 w=0.2 | l=1: n=4 w=0.4 | l=2: n=7 w=0.7      ║
+║    l=3: n=11 w=1.1 | l=4: n=17 w=1.7 | l=5: n=23 w=2.3 | l=6: n=29 w=2.9║
+╚══════════════════════════════════════════════════════════════════════════════╝
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveComputing — Project 2: The Brain Model</title>
+<style>
+/* Strip all browser defaults; box-sizing: border-box prevents surprise scrollbars. */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* Full-viewport black background — sphere's limb-darkening dissolves into this. */
+html, body { width: 100%; height: 100%; min-height: 100vh; background: #000; overflow: hidden; }
+
+/* Canvas pinned to cover the full viewport at all times. */
+canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- Three.js r128 from Cloudflare CDN. Stable version, no breaking API changes. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 1 — RENDERER
+// ═════════════════════════════════════════════════════════════════════════════
+
+const canvas   = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2.5));   // cap at 2.5× for perf
+renderer.setClearColor(0x000000, 1);                        // pure black sky
+const scene = new THREE.Scene();
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 2 — CAMERA  (dynamic FOV so sphere always fits the frame)
+// ═════════════════════════════════════════════════════════════════════════════
+
+const CAM_Z = 6.8;    // camera distance along +Z from origin
+const FIT_R = 2.30;   // guaranteed-visible radius (sphere 1.52 + halos + margin)
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
+camera.position.z = CAM_Z;
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 3 — STARFIELD  (1800 points on shells at r = 55–95 units)
+// Arc-cosine trick: phi = acos(2u-1) gives uniform solid-angle distribution.
+// ═════════════════════════════════════════════════════════════════════════════
+
+(function buildStars() {
+  const N = 1800, pos = new Float32Array(N*3), col = new Float32Array(N*3);
+  for (let i = 0; i < N; i++) {
+    const theta = Math.random() * 2 * Math.PI;
+    const phi   = Math.acos(2 * Math.random() - 1);   // uniform on sphere
+    const r     = 55 + Math.random() * 40;             // depth variation
+    pos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+    pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    pos[i*3+2] = r * Math.cos(phi);
+    col[i*3]   = 0.54 + Math.random() * 0.36;   // R: slightly warmer
+    col[i*3+1] = 0.58 + Math.random() * 0.36;   // G: warm-leaning
+    col[i*3+2] = 0.52 + Math.random() * 0.30;   // B: reduced — warmer starlight
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({
+    vertexColors: true, size: 0.055, transparent: true, opacity: 0.60, sizeAttenuation: true,
+  })));
+})();
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 4 — VERTEX SHADER
+// Runs once per vertex (~25 600 vertices per frame).
+// Passes two surface normals to the fragment shader:
+//   vN  — model-space normal = the (x,y,z) coordinates on the unit sphere.
+//          Every spherical harmonic formula below uses these as input.
+//   vVN — view-space normal. abs(vVN.z) = 1 at sphere centre, 0 at rim.
+//          Drives limb-darkening and rim-glow effects.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const vertShader = /* glsl */`
+  varying vec3 vN;    // model-space normal → spherical harmonic input
+  varying vec3 vVN;   // view-space normal  → rim glow and limb darkening
+  void main() {
+    vN  = normalize(normal);
+    vVN = normalize(normalMatrix * normal);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 5 — FRAGMENT SHADER
+//
+// Runs once per pixel (~200 000–500 000 pixels/frame).
+// For each pixel the shader:
+//   1. Reads (x,y,z) from vN — the surface point on the unit sphere.
+//   2. Evaluates all 49 real spherical harmonics Y_l^m at that point (l=0..6).
+//   3. Weights each by the neural-field kernel g_l(σ): a Gaussian that
+//      suppresses high-l modes when σ is large (seizure state) and lets
+//      them through when σ is small (healthy, high-dimensional state).
+//   4. Multiplies by the time-varying amplitude a_lm(t) = A·cos(ω_l·t + φ).
+//   5. Sums all 49 weighted contributions → F, the cortical field value.
+//   6. Maps F through the colour function cmap().
+//   7. Applies directional shading, rim glow, and limb darkening.
+//
+// SEAMLESS LOOP:
+//   All ω_l are integer multiples of w_base = 0.1.
+//   At t = T_loop = 20π: cos(ω_l·T_loop + φ) = cos(2π·n_l + φ) = cos(φ).
+//   Every term returns to its exact starting value — mathematically seamless.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const fragShader = /* glsl */`
+  precision highp float;   // maximum float precision — prevents colour banding
+
+  varying vec3  vN;    // model-space surface normal = (x,y,z) on unit sphere
+  varying vec3  vVN;   // view-space normal — for rim glow / limb darkening
+  uniform float u_t;   // simulation time, updated each frame from JavaScript
+
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // COLOUR MAP:  F ∈ [−1, +1]  →  RGB
+  //   PROJECT 2 — THE SPHERE AS BRAIN MODEL
+  //   Negative F → deep umber / dark earth (inhibition / deep cortex)
+  //   F ≈ 0      → true black             (resting; power curve keeps this dark)
+  //   Positive F → emerald → green-gold → warm gold (excitation / living tissue)
+  // Evokes organic warmth, neural tissue, biological process.
+  // ───────────────────────────────────────────────────────────────────────────
+  vec3 cmap(float t) {
+    t = clamp(t, -1.0, 1.0);
+    if (t < 0.0) {
+      float s = pow(-t, 0.62);   // γ<1: inhibitory zone stays dark
+      return vec3(s*0.22, s*0.10, s*0.02);             // deep umber / dark earth
+    }
+    if (t < 0.30) {
+      float u = pow(t/0.30, 1.8);   // γ>1: near-zero stays truly black
+      return vec3(u*0.02, u*0.20, u*0.06);             // faint dark emerald
+    }
+    if (t < 0.64) {
+      float u = (t - 0.30) / 0.34;
+      return vec3(0.02 + u*0.38, 0.20 + u*0.45, 0.06 + u*0.02); // emerald → green-gold
+    }
+    float u = (t - 0.64) / 0.36;
+    return vec3(0.40 + u*0.52, 0.65 + u*0.22, 0.08 + u*0.12);  // green-gold → warm gold
+  }
+
+
+  void main() {
+
+    // ── Surface coordinates ───────────────────────────────────────────────────
+    // vN is the outward unit normal = (x,y,z) on the sphere surface.
+    // x²+y²+z² = 1 exactly; this is the input to all spherical harmonic formulas.
+    vec3  n = normalize(vN);
+    float x = n.x,  y = n.y,  z = n.z;
+
+    // ── Precomputed powers — avoids redundant multiply operations on GPU ──────
+    float z2 = z*z;          // z²  — used from l=2 onward
+    float z3 = z2*z;         // z³  — used in l=3 zonal harmonic
+    float z4 = z2*z2;        // z⁴  — used in l=4 zonal and tesseral harmonics
+    float z5 = z4*z;         // z⁵  — NEW: needed in Y_5^0 and Y_6^{±1}
+    float z6 = z4*z2;        // z⁶  — NEW: needed in Y_6^0
+    float x2      = x*x;         // x²
+    float y2      = y*y;          // y²
+    float xy      = x*y;          // xy    — common factor in sectoral harmonics
+    float x2y2    = x2*y2;        // x²y²  — used in l=5 and l=6 sectoral harmonics
+    float x2_m_y2 = x2 - y2;      // x²-y² — common tesseral factor
+
+
+    // ── NEURAL-FIELD CONNECTIVITY KERNEL σ(t) ────────────────────────────────
+    // σ oscillates at ω = 0.1 = 1×w_base → one complete cycle per T_loop.
+    // σ ∈ [0.26, 0.74]:
+    //   Small σ (local coupling)  → high-l modes active  → complex healthy state
+    //   Large σ (broad coupling)  → high-l suppressed    → slow synchrony (seizure)
+    float sigma = 0.50 + 0.24 * sin(u_t * 0.1);
+    float s2    = sigma * sigma;   // σ² — used in all kernel exponents
+
+    // g_l = exp(−c_l · σ²),  c_l ≈ l(l+1)/2  (from Laplace-Beltrami eigenvalue l(l+1))
+    // Higher l → larger c_l → exponential decays faster → finer modes vanish first.
+    float g0 = 1.0;               // l=0: eigenvalue 0  — never suppressed
+    float g1 = exp(-1.0  * s2);   // l=1: eigenvalue 2,  c=1
+    float g2 = exp(-3.0  * s2);   // l=2: eigenvalue 6,  c=3
+    float g3 = exp(-6.0  * s2);   // l=3: eigenvalue 12, c=6
+    float g4 = exp(-10.0 * s2);   // l=4: eigenvalue 20, c=10
+    float g5 = exp(-15.0 * s2);   // l=5: eigenvalue 30, c=15  ← NEW
+    float g6 = exp(-21.0 * s2);   // l=6: eigenvalue 42, c=21  ← NEW (most suppressed)
+
+
+    // ── OSCILLATION FREQUENCIES ──────────────────────────────────────────────
+    // All ω_l = n_l × 0.1 (integers × w_base) → seamless loop at T_loop = 20π.
+    // Ratios roughly follow the neural field dispersion relation ω ∝ √(l(l+1)):
+    //   √(l(l+1)):  √2  √6  √12  √20  √30  √42
+    //   ratios:    1.00 1.73 2.45 3.16 3.87 4.58
+    float w0 = 0.2;   // l=0: n=2  — global mode, slowest
+    float w1 = 0.4;   // l=1: n=4  — dipole waves
+    float w2 = 0.7;   // l=2: n=7  — quadrupole
+    float w3 = 1.1;   // l=3: n=11 — octupole, visibly faster
+    float w4 = 1.7;   // l=4: n=17 — fine patches, fast
+    float w5 = 2.3;   // l=5: n=23 — very fine filigree, very fast   ← NEW
+    float w6 = 2.9;   // l=6: n=29 — finest detail, fastest of all   ← NEW
+
+
+    // ── TIME-VARYING AMPLITUDES  a_lm(t) = A·cos(ω_l·t + φ_lm) ─────────────
+    // Each of the 49 modes oscillates independently at its degree's frequency.
+    // Phase offsets φ_lm are fixed constants — they create rich interference
+    // within each loop period without breaking the seamless loop.
+    // Amplitudes taper with l so coarse structure dominates, fine detail shimmers.
+
+    // l=0 (1 mode)
+    float a00  = 0.80 * cos(w0*u_t + 0.72);
+
+    // l=1 (3 modes)
+    float a1m  = 0.70 * cos(w1*u_t + 1.38);
+    float a10  = 0.65 * cos(w1*u_t + 2.51);
+    float a1p  = 0.75 * cos(w1*u_t + 0.18);
+
+    // l=2 (5 modes)
+    float a2mm = 0.62 * cos(w2*u_t + 3.14);
+    float a2m  = 0.68 * cos(w2*u_t + 0.93);
+    float a20  = 0.72 * cos(w2*u_t + 1.87);
+    float a2p  = 0.64 * cos(w2*u_t + 4.21);
+    float a2pp = 0.66 * cos(w2*u_t + 2.76);
+
+    // l=3 (7 modes)
+    float a3a  = 0.52 * cos(w3*u_t + 0.44);
+    float a3b  = 0.48 * cos(w3*u_t + 5.18);
+    float a3c  = 0.54 * cos(w3*u_t + 1.62);
+    float a3d  = 0.56 * cos(w3*u_t + 3.89);   // m=0 zonal: 3 latitude stripes
+    float a3e  = 0.50 * cos(w3*u_t + 0.28);
+    float a3f  = 0.47 * cos(w3*u_t + 4.67);
+    float a3g  = 0.53 * cos(w3*u_t + 2.13);
+
+    // l=4 (9 modes)
+    float a4a  = 0.40 * cos(w4*u_t + 1.05);
+    float a4b  = 0.44 * cos(w4*u_t + 2.33);
+    float a4c  = 0.38 * cos(w4*u_t + 4.71);
+    float a4d  = 0.46 * cos(w4*u_t + 0.87);
+    float a4e  = 0.42 * cos(w4*u_t + 3.60);   // m=0 zonal: 4 latitude stripes
+    float a4f  = 0.39 * cos(w4*u_t + 1.92);
+    float a4g  = 0.45 * cos(w4*u_t + 5.50);
+    float a4h  = 0.41 * cos(w4*u_t + 2.78);
+    float a4i  = 0.43 * cos(w4*u_t + 0.33);
+
+    // l=5 (11 modes) — NEW in v3. Amplitudes ≈ 0.32–0.38.
+    float a5a  = 0.35 * cos(w5*u_t + 0.71);   // m=-5
+    float a5b  = 0.33 * cos(w5*u_t + 2.94);   // m=-4
+    float a5c  = 0.36 * cos(w5*u_t + 1.15);   // m=-3
+    float a5d  = 0.34 * cos(w5*u_t + 4.37);   // m=-2
+    float a5e  = 0.38 * cos(w5*u_t + 0.52);   // m=-1
+    float a5f  = 0.37 * cos(w5*u_t + 3.20);   // m= 0: zonal 5-stripe
+    float a5g  = 0.36 * cos(w5*u_t + 1.68);   // m=+1
+    float a5h  = 0.32 * cos(w5*u_t + 5.04);   // m=+2
+    float a5i  = 0.35 * cos(w5*u_t + 2.41);   // m=+3
+    float a5j  = 0.33 * cos(w5*u_t + 0.89);   // m=+4
+    float a5k  = 0.36 * cos(w5*u_t + 3.57);   // m=+5
+
+    // l=6 (13 modes) — NEW in v3. Amplitudes ≈ 0.25–0.30.
+    float a6a  = 0.27 * cos(w6*u_t + 1.33);   // m=-6
+    float a6b  = 0.29 * cos(w6*u_t + 4.16);   // m=-5
+    float a6c  = 0.26 * cos(w6*u_t + 0.74);   // m=-4
+    float a6d  = 0.30 * cos(w6*u_t + 2.58);   // m=-3
+    float a6e  = 0.28 * cos(w6*u_t + 5.39);   // m=-2
+    float a6f  = 0.25 * cos(w6*u_t + 1.07);   // m=-1
+    float a6g  = 0.29 * cos(w6*u_t + 3.82);   // m= 0: zonal 6-stripe
+    float a6h  = 0.27 * cos(w6*u_t + 0.45);   // m=+1
+    float a6i  = 0.30 * cos(w6*u_t + 2.19);   // m=+2
+    float a6j  = 0.26 * cos(w6*u_t + 4.93);   // m=+3
+    float a6k  = 0.28 * cos(w6*u_t + 1.61);   // m=+4
+    float a6l  = 0.29 * cos(w6*u_t + 3.27);   // m=+5
+    float a6m  = 0.27 * cos(w6*u_t + 0.95);   // m=+6
+
+
+    // ── REAL SPHERICAL HARMONICS  Y_l^m(x,y,z) ──────────────────────────────
+    // Cartesian polynomial forms on the unit sphere (x²+y²+z²=1).
+    // Normalisation ∫|Y_l^m|²dΩ = 1.  Constants from first-principles derivation.
+
+    // l=0 (uniform)
+    float Y00  = 0.28209;
+
+    // l=1 (dipoles: one nodal circle each)
+    float Y1m1 = 0.48860 * y;
+    float Y10  = 0.48860 * z;
+    float Y11  = 0.48860 * x;
+
+    // l=2 (quadrupoles: two nodal circles each)
+    float Y2m2 = 1.09255 * xy;
+    float Y2m1 = 1.09255 * y*z;
+    float Y20  = 0.31539 * (3.0*z2 - 1.0);
+    float Y21  = 1.09255 * x*z;
+    float Y22  = 0.54627 * x2_m_y2;
+
+    // l=3 (octupoles: three nodal circles each)
+    float Y3m3 = 0.59004 * y*(3.0*x2 - y2);
+    float Y3m2 = 2.89061 * xy*z;
+    float Y3m1 = 0.45705 * y*(5.0*z2 - 1.0);
+    float Y30  = 0.37318 * z*(5.0*z2 - 3.0);
+    float Y31  = 0.45705 * x*(5.0*z2 - 1.0);
+    float Y32  = 1.44530 * z*x2_m_y2;
+    float Y33  = 0.59004 * x*(x2 - 3.0*y2);
+
+    // l=4 (16-poles: four nodal circles each)
+    float Y4m4 = 2.50334 * xy*x2_m_y2;
+    float Y4m3 = 1.77013 * y*z*(3.0*x2 - y2);
+    float Y4m2 = 0.94617 * xy*(7.0*z2 - 1.0);
+    float Y4m1 = 0.66905 * y*z*(7.0*z2 - 3.0);
+    float Y40  = 0.10579 * (35.0*z4 - 30.0*z2 + 3.0);
+    float Y41  = 0.66905 * x*z*(7.0*z2 - 3.0);
+    float Y42  = 0.47309 * x2_m_y2*(7.0*z2 - 1.0);
+    float Y43  = 1.77013 * x*z*(x2 - 3.0*y2);
+    float Y44  = 0.62584 * (x2*x2 - 6.0*x2y2 + y2*y2);
+
+    // ── l=5 (32-poles: five nodal circles each) — NEW ─────────────────────────
+    // Constant derivation: c = √2 · N_l^m · (d^m P_5 / dz^m  coefficient)
+    // Key: sin^n(θ)·cos(nφ) = Re[(x+iy)^n],  sin^n(θ)·sin(nφ) = Im[(x+iy)^n]
+    //
+    // m=±5: sectoral — 10-lobe equatorial star
+    //   d⁵P_5/dz⁵ = 945;  N_5^5 = 4.913×10⁻⁴
+    //   c = √2·N_5^5·945 = 0.65669
+    //   Re[(x+iy)^5] = x(x⁴-10x²y²+5y⁴),  Im[(x+iy)^5] = y(5x⁴-10x²y²+y⁴)
+    float Y5m5 = 0.65669 * y*(5.0*x2*x2 - 10.0*x2y2 + y2*y2);
+    float Y55  = 0.65669 * x*(x2*x2 - 10.0*x2y2 + 5.0*y2*y2);
+
+    // m=±4: 8-lobe star × z latitude factor
+    //   d⁴P_5/dz⁴ = 945z;  N_5^4 = 1.554×10⁻³
+    //   c = √2·N_5^4·945 = 2.0767;  Im[(x+iy)^4] = 4xy(x²-y²), so ×4 for m=-4
+    float Y5m4 = 8.3068  * xy*x2_m_y2*z;   // 2.0767 × 4 = 8.3068
+    float Y54  = 2.0767  * z*(x2*x2 - 6.0*x2y2 + y2*y2);
+
+    // m=±3: trefoil × (9z²-1) latitude envelope
+    //   d³P_5/dz³ = 52.5(9z²-1);  N_5^3 = 6.589×10⁻³
+    //   c = √2·N_5^3·52.5 = 0.48927
+    float Y5m3 = 0.48927 * y*(3.0*x2 - y2)*(9.0*z2 - 1.0);
+    float Y53  = 0.48927 * x*(x2 - 3.0*y2)*(9.0*z2 - 1.0);
+
+    // m=±2: z·(3z²-1) × xy or (x²-y²)
+    //   d²P_5/dz² = 52.5z(3z²-1);  N_5^2 = 0.032280
+    //   c = √2·N_5^2·52.5 = 2.3966;  sin²θ·sin(2φ)=2xy so ×2 for m=-2
+    float Y5m2 = 4.7932  * xy*z*(3.0*z2 - 1.0);   // 2.3966 × 2 = 4.7932
+    float Y52  = 2.3966  * z*x2_m_y2*(3.0*z2 - 1.0);
+
+    // m=±1: (21z⁴-14z²+1) latitude polynomial × x or y
+    //   d¹P_5/dz¹ = (1/8)(315z⁴-210z²+15) = (15/8)(21z⁴-14z²+1);  N_5^1 = 0.17085
+    //   c = √2·N_5^1·(15/8) = 0.45315
+    float Y5m1 = 0.45315 * y*(21.0*z4 - 14.0*z2 + 1.0);
+    float Y51  = 0.45315 * x*(21.0*z4 - 14.0*z2 + 1.0);
+
+    // m=0: zonal — 5 alternating latitude stripes
+    //   P_5(z)=(1/8)(63z⁵-70z³+15z);  N_5^0 = 0.93561
+    //   c = 0.93561/8 = 0.11695
+    float Y50  = 0.11695 * z*(63.0*z4 - 70.0*z2 + 15.0);
+
+
+    // ── l=6 (64-poles: six nodal circles each) — NEW ──────────────────────────
+    // Finest spatial frequency in this simulation — gamma-band-like cortical scale.
+    // Constant derivation: c = √2 · N_l^m · (d^m P_6 / dz^m  coefficient)
+    //
+    // Need x⁴, y⁴ for the sectoral (|m|=6,5) harmonics.
+    float x4 = x2*x2;   // x⁴
+    float y4 = y2*y2;   // y⁴
+
+    // m=±6: 12-lobe equatorial star (sectoral — no z dependence)
+    //   d⁶P_6/dz⁶ = 10395;  N_6^6 = 4.648×10⁻⁵
+    //   c = √2·N_6^6·10395 = 0.68322
+    //   Re[(x+iy)^6] = x⁶-15x⁴y²+15x²y⁴-y⁶
+    //   Im[(x+iy)^6] = 2xy(3x⁴-10x²y²+3y⁴)  → ×2 for m=-6
+    float Y6m6 = 1.36644 * xy*(3.0*x4 - 10.0*x2y2 + 3.0*y4);   // 0.68322 × 2
+    float Y66  = 0.68322 * (x4*x2 - 15.0*x4*y2 + 15.0*x2*y4 - y4*y2);
+
+    // m=±5: 10-lobe star × z latitude factor
+    //   d⁵P_6/dz⁵ = 10395z;  N_6^5 = 1.610×10⁻⁴
+    //   c = √2·N_6^5·10395 = 2.3671
+    float Y6m5 = 2.3671 * y*z*(5.0*x4 - 10.0*x2y2 + y4);
+    float Y65  = 2.3671 * x*z*(x4 - 10.0*x2y2 + 5.0*y4);
+
+    // m=±4: (11z²-1) latitude envelope × 8-lobe azimuthal pattern
+    //   d⁴P_6/dz⁴ = (945/2)(11z²-1);  N_6^4 = 7.552×10⁻⁴
+    //   c = √2·N_6^4·(945/2) = 0.50467;  Im[(x+iy)^4]=4xy(x²-y²) → ×4 for m=-4
+    float Y6m4 = 2.01868 * xy*x2_m_y2*(11.0*z2 - 1.0);   // 0.50467 × 4
+    float Y64  = 0.50467 * (11.0*z2 - 1.0)*(x4 - 6.0*x2y2 + y4);
+
+    // m=±3: z·(11z²-3) latitude band × trefoil azimuthal pattern
+    //   d³P_6/dz³ = (315/2)z(11z²-3);  N_6^3 = 4.139×10⁻³
+    //   c = √2·N_6^3·(315/2) = 0.92174
+    float Y6m3 = 0.92174 * y*z*(3.0*x2 - y2)*(11.0*z2 - 3.0);
+    float Y63  = 0.92174 * x*z*(x2 - 3.0*y2)*(11.0*z2 - 3.0);
+
+    // m=±2: (33z⁴-18z²+1) latitude polynomial × (x²-y²) or 2xy
+    //   d²P_6/dz² = (105/8)(33z⁴-18z²+1);  N_6^2 = 0.024814
+    //   c = √2·N_6^2·(105/8) = 0.46065;  ×2 for m=-2
+    float Y6m2 = 0.92130 * xy*(33.0*z4 - 18.0*z2 + 1.0);   // 0.46065 × 2
+    float Y62  = 0.46065 * x2_m_y2*(33.0*z4 - 18.0*z2 + 1.0);
+
+    // m=±1: z·(33z⁴-30z²+5) latitude polynomial × x or y
+    //   d¹P_6/dz¹ = (21/8)z(33z⁴-30z²+5);  N_6^1 = 0.15695
+    //   c = √2·N_6^1·(21/8) = 0.58262
+    float Y6m1 = 0.58262 * y*z*(33.0*z4 - 30.0*z2 + 5.0);
+    float Y61  = 0.58262 * x*z*(33.0*z4 - 30.0*z2 + 5.0);
+
+    // m=0: zonal — 6 alternating latitude stripes
+    //   P_6(z)=(1/16)(231z⁶-315z⁴+105z²-5);  N_6^0 = 1.01713
+    //   c = 1.01713/16 = 0.063571
+    float Y60  = 0.063571 * (231.0*z6 - 315.0*z4 + 105.0*z2 - 5.0);
+
+
+    // ── NEURAL FIELD SUM  F(x,y,z,t) ─────────────────────────────────────────
+    // F = Σ_{l=0}^{6} g_l(σ) · Σ_{m=-l}^{l} a_lm(t) · Y_l^m(x,y,z)
+    //
+    // Three factors per term:
+    //   g_l      → how much this spatial degree is coupled by the connectivity kernel
+    //   a_lm(t)  → when and how strongly this mode is currently active
+    //   Y_l^m    → where on the sphere this mode is active (its spatial shape)
+    //
+    // Large σ: g5, g6 ≈ 0 → l=5, l=6 are invisible; only coarse structure.
+    // Small σ: g5, g6 > 0 → fine filigree from l=5, l=6 becomes visible.
+    float F =
+      g0 * a00 * Y00
+
+      + g1 * (a1m*Y1m1 + a10*Y10 + a1p*Y11)
+
+      + g2 * (a2mm*Y2m2 + a2m*Y2m1 + a20*Y20 + a2p*Y21 + a2pp*Y22)
+
+      + g3 * (a3a*Y3m3 + a3b*Y3m2 + a3c*Y3m1 + a3d*Y30
+            + a3e*Y31  + a3f*Y32  + a3g*Y33)
+
+      + g4 * (a4a*Y4m4 + a4b*Y4m3 + a4c*Y4m2 + a4d*Y4m1 + a4e*Y40
+            + a4f*Y41  + a4g*Y42  + a4h*Y43  + a4i*Y44)
+
+      // l=5: 11 thirty-two-pole modes  (NEW)
+      + g5 * (a5a*Y5m5 + a5b*Y5m4 + a5c*Y5m3 + a5d*Y5m2 + a5e*Y5m1
+            + a5f*Y50
+            + a5g*Y51  + a5h*Y52  + a5i*Y53  + a5j*Y54  + a5k*Y55)
+
+      // l=6: 13 sixty-four-pole modes  (NEW)
+      + g6 * (a6a*Y6m6 + a6b*Y6m5 + a6c*Y6m4 + a6d*Y6m3 + a6e*Y6m2
+            + a6f*Y6m1
+            + a6g*Y60
+            + a6h*Y61  + a6i*Y62  + a6j*Y63  + a6k*Y64  + a6l*Y65
+            + a6m*Y66);
+
+    // Scale to fill [−1,+1] for the colour map.
+    // Reduced from 3.0 to 2.8 vs v2: the 24 new modes add marginal raw amplitude.
+    F = clamp(F * 2.8, -1.0, 1.0);
+
+    vec3 col = cmap(F);
+
+    // ── Subtle directional shading (7% variation — barely perceptible) ─────────
+    float diff = 0.93 + 0.07 * clamp(dot(n, normalize(vec3(0.4, 0.7, 1.0))), 0.0, 1.0);
+    col *= diff;
+
+    // ── Warm amber rim glow at the silhouette edge ─────────────────────────────
+    // pow(x, 3.2): tight power → glow concentrates at extreme rim, not sphere body.
+    float rimGlow = pow(1.0 - abs(vVN.z), 3.2);
+    col += rimGlow * vec3(0.12, 0.16, 0.01);
+
+    // ── Limb darkening — the "floating in space" effect ────────────────────────
+    // abs(vVN.z) = 1.0 at sphere centre, 0.0 at rim.
+    // pow(facing, 0.36): slow rolloff → most of sphere stays bright;
+    // only the last ~15% of radius dims rapidly to 18% of centre brightness.
+    float facing = abs(vVN.z);
+    float limb   = pow(facing, 0.36);
+    col *= (0.18 + 0.82 * limb);
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 6 — MAIN SPHERE MESH
+// 160×160 segments: smooth silhouette on HiDPI screens with no visible faceting.
+// ShaderMaterial: GPU renders our custom shaders.
+// Only one uniform (u_t = one float) sent to GPU per frame — very efficient.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const mat = new THREE.ShaderMaterial({
+  vertexShader:   vertShader,
+  fragmentShader: fragShader,
+  uniforms: { u_t: { value: 0.0 } },   // simulation time
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.52, 160, 160), mat));
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 7 — ATMOSPHERIC HALOS
+// Two translucent shells rendered from their INSIDE (BackSide).
+// AdditiveBlending: only brightens, never darkens. depthWrite: false avoids Z-fighting.
+//   Inner (r=1.78, power=2.5): tight blue corona.
+//   Outer (r=2.18, power=1.5): wide diffuse atmospheric haze.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const makeHalo = (radius, power, alpha, r, g, b) => {
+  scene.add(new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 48, 48),
+    new THREE.ShaderMaterial({
+      vertexShader: `
+        varying vec3 vVN;
+        void main() {
+          vVN = normalize(normalMatrix * normal);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        precision mediump float;
+        varying vec3 vVN;
+        void main() {
+          float rim = 1.0 - abs(vVN.z);   // 0 at centre, 1 at rim
+          float a   = pow(rim, ${power.toFixed(1)}) * ${alpha.toFixed(2)};
+          gl_FragColor = vec4(${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}, a);
+        }`,
+      transparent: true, blending: THREE.AdditiveBlending,
+      side: THREE.BackSide, depthWrite: false,
+    })
+  ));
+};
+makeHalo(1.78, 2.5, 0.44, 0.06, 0.28, 0.04);   // inner warm emerald corona
+makeHalo(2.18, 1.5, 0.14, 0.04, 0.16, 0.02);   // outer soft earth-green halo
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 8 — RESPONSIVE RESIZE
+// Compute vertical FOV dynamically so FIT_R fits in the smaller viewport dimension:
+//   Landscape (W≥H): height is tight → halfFOV = atan(FIT_R / CAM_Z)
+//   Portrait  (W<H): width is tight  → halfFOV = atan(FIT_R / (aspect × CAM_Z))
+// ═════════════════════════════════════════════════════════════════════════════
+
+function onResize() {
+  const W = window.innerWidth || 300, H = window.innerHeight || 300;
+  renderer.setSize(W, H, false);
+  camera.aspect = W / H;
+  const halfRad = (camera.aspect >= 1)
+    ? Math.atan(FIT_R / CAM_Z)
+    : Math.atan(FIT_R / (camera.aspect * CAM_Z));
+  camera.fov = 2 * halfRad * (180 / Math.PI);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SECTION 9 — ANIMATION LOOP
+//
+// SEAMLESS LOOP: t = (t + dt) % T_LOOP
+//   T_LOOP = 20π ≈ 62.83 sim-units.  All ω_l = n_l × 0.1 are integer multiples
+//   of w_base, so cos(ω_l·T_LOOP + φ) = cos(2πn_l + φ) = cos(φ) — exact reset.
+//   Real-time duration ≈ 62.83 / (0.022 × 60fps) ≈ 47.6 seconds per loop.
+//
+// ROTATION: Y-axis slow spin + X-axis sinusoidal tilt at w = 0.1 = w_base
+//   → tilt also resets seamlessly at T_LOOP (sin loops with the same period).
+// ═════════════════════════════════════════════════════════════════════════════
+
+const T_LOOP = 20.0 * Math.PI;   // loop period: 2π / w_base = 2π / 0.1 = 20π
+const dt = 0.022;                 // time step per frame
+let t = 0.0;
+
+const sphereMesh = scene.children.find(c => c.isMesh && c.material === mat);
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // Advance time and wrap at T_LOOP — the modulo makes the loop mathematically exact.
+  t = (t + dt) % T_LOOP;
+
+  // Send time to GPU. This single uniform is the only CPU→GPU transfer per frame.
+  mat.uniforms.u_t.value = t;
+
+  if (sphereMesh) {
+    // Y-axis: slow constant rotation, revealing all azimuths of the eigenmode pattern.
+    sphereMesh.rotation.y += 0.0016;
+    // X-axis: sinusoidal tilt at w=0.1 → period=T_LOOP → resets seamlessly.
+    sphereMesh.rotation.x = 0.14 + 0.05 * Math.sin(t * 0.1);
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+</script>
+</body>
+</html>
