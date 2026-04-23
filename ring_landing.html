@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ring</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+  //
+  // wavecomputing.org — ring landing page visualisation
+  //
+  // Top-down view of a great circle bearing:
+  //   - three eigenmode traveling waves (k = 2, 3, 5), one counter-propagating
+  //   - gentle amplitude modulation on k=2, k=3 (±20 %)
+  //   - time-warp τ(t) making the whole field breathe: slope in [0.2, 1.8]
+  //   - eight traveling Gaussian pulses with integer winding numbers ±1…±4
+  //
+  // Everything closes exactly at T = 24 s. The loop is seamless in both
+  // amplitude and velocity — no visible seam.
+  //
+
+  const canvas = document.getElementById('c');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000, 1);
+
+  const scene = new THREE.Scene();
+
+  // Top-down camera. up = (0, 0, -1) avoids the lookAt singularity that would
+  // otherwise occur when look direction is parallel to the default up vector.
+  const camera = new THREE.PerspectiveCamera(22, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.up.set(0, 0, -1);
+  camera.position.set(0, 6.0, 0);
+  camera.lookAt(0, 0, 0);
+
+  const T_PERIOD = 24.0;
+
+  const vert = `
+    uniform float uTime;
+    varying float vAmp;
+
+    #define PI     3.14159265359
+    #define TWO_PI 6.28318530718
+
+    float ringDist(float a, float b) {
+      float d = a - b;
+      return atan(sin(d), cos(d));
+    }
+
+    float pulse(float theta, float theta0, float sigma) {
+      float d = ringDist(theta, theta0);
+      return exp(-d * d / (sigma * sigma));
+    }
+
+    void main() {
+      float theta = atan(position.y, position.x);
+
+      float T = 24.0;
+
+      float tau = uTime + 0.8 * (T / TWO_PI) * sin(TWO_PI * uTime / T);
+
+      float wb = TWO_PI / T;
+
+      float am2 = 0.55 * (1.0 + 0.20 * sin(TWO_PI * uTime / T));
+      float am3 = 0.40 * (1.0 + 0.20 * cos(TWO_PI * uTime / T));
+      float am5 = 0.20;
+
+      // Breathing eigenmode background
+      float w  = am2 * sin(2.0 * theta - 1.0 * wb * tau);
+            w += am3 * cos(3.0 * theta + 1.0 * wb * tau);
+            w += am5 * sin(5.0 * theta - 2.0 * wb * tau + 1.3);
+
+      // Eight travelling pulses: winding numbers ±1…±4 (all integer — loop closes).
+      // Start phases spaced at π/4 intervals around the ring. Mixed widths and
+      // amplitudes give a hierarchy — some sharp "darts", some wider "packets".
+      //
+      // amp    start θ          winding    σ
+      w += 0.55 * pulse(theta, 0.0            + 3.0 * wb * tau, 0.12);
+      w += 0.35 * pulse(theta, PI / 4.0       - 2.0 * wb * tau, 0.18);
+      w += 0.28 * pulse(theta, PI / 2.0       + 1.0 * wb * tau, 0.22);
+      w += 0.50 * pulse(theta, 3.0 * PI / 4.0 - 4.0 * wb * tau, 0.10);
+      w += 0.45 * pulse(theta, PI             + 2.0 * wb * tau, 0.15);
+      w += 0.32 * pulse(theta, 5.0 * PI / 4.0 - 1.0 * wb * tau, 0.20);
+      w += 0.50 * pulse(theta, 3.0 * PI / 2.0 + 4.0 * wb * tau, 0.10);
+      w += 0.45 * pulse(theta, 7.0 * PI / 4.0 - 3.0 * wb * tau, 0.13);
+
+      float amp = w / 1.15;
+
+      vAmp = 0.5 + 0.5 * amp;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+
+  const frag = `
+    uniform float uIntensity;
+    varying float vAmp;
+    void main() {
+      vec3 deep   = vec3(0.004, 0.010, 0.08);
+      vec3 blue   = vec3(0.012, 0.042, 0.702);
+      vec3 pale   = vec3(0.55,  0.65,  0.90);
+      vec3 orange = vec3(0.902, 0.624, 0.0);
+
+      vec3 col = mix(deep, blue,   smoothstep(0.08, 0.50, vAmp));
+      col = mix(col,       pale,   smoothstep(0.58, 0.78, vAmp) * 0.50);
+      col = mix(col,       orange, smoothstep(0.80, 0.99, vAmp));
+
+      gl_FragColor = vec4(col * uIntensity, 1.0);
+    }
+  `;
+
+  function makeRingMaterial(intensity, additive) {
+    return new THREE.ShaderMaterial({
+      vertexShader: vert,
+      fragmentShader: frag,
+      uniforms: {
+        uTime:      { value: 0 },
+        uIntensity: { value: intensity }
+      },
+      transparent: additive,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: !additive,
+      depthTest:  !additive
+    });
+  }
+
+  const coreGeom  = new THREE.TorusGeometry(1.0, 0.010, 16, 480);
+  const haloGeom  = new THREE.TorusGeometry(1.0, 0.055, 16, 480);
+  const outerGeom = new THREE.TorusGeometry(1.0, 0.150, 16, 480);
+
+  const coreMat  = makeRingMaterial(1.00, false);
+  const haloMat  = makeRingMaterial(0.20, true);
+  const outerMat = makeRingMaterial(0.07, true);
+
+  const coreRing  = new THREE.Mesh(coreGeom,  coreMat);
+  const haloRing  = new THREE.Mesh(haloGeom,  haloMat);
+  const outerRing = new THREE.Mesh(outerGeom, outerMat);
+
+  for (const m of [coreRing, haloRing, outerRing]) {
+    m.rotation.x = Math.PI / 2;
+    scene.add(m);
+  }
+  coreRing.renderOrder  = 0;
+  haloRing.renderOrder  = 1;
+  outerRing.renderOrder = 2;
+
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  const clock = new THREE.Clock();
+  let time = 0;
+
+  function render() {
+    time += clock.getDelta();
+    // Wrap time modulo T. Because every shader term is periodic with period T,
+    // this wrap is invisible in the rendered output.
+    const t = time % T_PERIOD;
+    coreMat.uniforms.uTime.value  = t;
+    haloMat.uniforms.uTime.value  = t;
+    outerMat.uniforms.uTime.value = t;
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(render);
+  }
+  render();
+</script>
+</body>
+</html>
