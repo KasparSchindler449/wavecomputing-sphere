@@ -1,35 +1,43 @@
 <!DOCTYPE html>
 <!--
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  WaveComputing.org — Cortical Eigenmode Visualisation  (v3)                 ║
+║  WaveComputing.org — Cortical Eigenmode Visualisation  (v4)                 ║
 ║  ─────────────────────────────────────────────────────────────────────────  ║
-║  WHAT'S NEW IN v3                                                            ║
-║    l = 5 modes added: 11 new harmonics (m = -5 … +5)                       ║
-║      Each l=5 mode has 5 nodal circles → fine filigree texture.             ║
-║    l = 6 modes added: 13 new harmonics (m = -6 … +6)                       ║
-║      Each l=6 mode has 6 nodal circles → the finest resolvable detail.      ║
-║    Total mode count: 1+3+5+7+9+11+13 = 49 spherical harmonics.             ║
-║    New precomputed Cartesian powers: x², y², xy, x²y², x²−y², z⁵, z⁶.    ║
-║    New kernel weights: g₅ = exp(−15σ²), g₆ = exp(−21σ²).                  ║
-║    New frequencies: l=5 → w=2.3 (n=23), l=6 → w=2.9 (n=29).              ║
-║    Normalisation scale 3.0 → 2.8 to absorb the extra modes gracefully.     ║
+║  CHANGES IN v4                                                               ║
+║    • Frequencies retuned to honestly track ω ∝ √(l(l+1)) (Laplace-Beltrami).║
+║      Previous v3 ratios grew faster than the dispersion would justify;       ║
+║      new n_l = [2, 4, 7, 10, 13, 15, 18] are the integer-multiples nearest  ║
+║      to the dispersion for l = 0..6, preserving the seamless loop.          ║
+║    • Connectivity kernel σ(t) profile changed: cosine starting high so each ║
+║      cycle begins with slow, large-scale patterns (σ = 0.80), dips to       ║
+║      σ = 0.20 mid-cycle for rich multi-scale interference, and returns to   ║
+║      σ = 0.80 for a smooth restart.                                          ║
+║    • Comments reframed in terms of effective dimensionality rather than      ║
+║      clinical-state labels — the kernel-width contrast is the physical      ║
+║      phenomenon; the brain-state interpretation is left to the viewer.       ║
+║    • Time integration driven by an integer frame counter — the loop is      ║
+║      mathematically exact, with no floating-point drift across cycles.       ║
+║    • Y-axis rotation locked to one full turn per cycle, so the visual state ║
+║      is truly periodic and every component restarts seamlessly.              ║
+║    • Cycle duration: 60.0 seconds at 60 fps (N_FRAMES = 3600).              ║
 ║                                                                              ║
-║  NORMALISATION CONSTANTS — DERIVATION SUMMARY                               ║
-║    Formula:  N_l^m = √( (2l+1)/(4π) · (l−m)!/(l+m)! )                     ║
-║    Real forms: Y_l^{+m} = √2·N_l^m·P_l^m(cosθ)·cos(mφ)                   ║
-║               Y_l^{-m} = √2·N_l^m·P_l^m(cosθ)·sin(mφ)                   ║
-║    On the unit sphere: sin^n(θ)·cos(nφ) = Re[(x+iy)^n]                    ║
-║                        sin^n(θ)·sin(nφ) = Im[(x+iy)^n]                    ║
-║    Associated Legendre derivatives (no Condon-Shortley phase):              ║
-║      P_5: d¹→(15/8)(21z⁴−14z²+1)·sinθ  d²→52.5z(3z²−1)·sin²θ           ║
-║           d³→52.5(9z²−1)·sin³θ           d⁴→945z·sin⁴θ   d⁵→945·sin⁵θ  ║
-║      P_6: d¹→(21/8)z(33z⁴−30z²+5)      d²→(105/8)(33z⁴−18z²+1)         ║
-║           d³→(315/2)z(11z²−3)           d⁴→(945/2)(11z²−1)               ║
-║           d⁵→10395z                     d⁶→10395                          ║
+║  FREQUENCY TABLE — dispersion ω ∝ √(l(l+1)), all = n × w_base = 0.1          ║
+║    l    √(l(l+1))    target ω    n_l   actual ω    relative err              ║
+║    0      0          (special)     2     0.2         —                       ║
+║    1     √2 = 1.414  0.400         4     0.4        +0.0%                   ║
+║    2     √6 = 2.449  0.693         7     0.7        +1.0%                   ║
+║    3    √12 = 3.464  0.980        10     1.0        +2.0%                   ║
+║    4    √20 = 4.472  1.265        13     1.3        +2.7%                   ║
+║    5    √30 = 5.477  1.549        15     1.5        −3.2%                   ║
+║    6    √42 = 6.481  1.833        18     1.8        −1.8%                   ║
 ║                                                                              ║
-║  FREQUENCY TABLE (all = n × w_base = 0.1 → loop at T = 20π ≈ 62.83)       ║
-║    σ: n=1 w=0.1 | l=0: n=2 w=0.2 | l=1: n=4 w=0.4 | l=2: n=7 w=0.7      ║
-║    l=3: n=11 w=1.1 | l=4: n=17 w=1.7 | l=5: n=23 w=2.3 | l=6: n=29 w=2.9║
+║  NORMALISATION CONSTANTS — DERIVATION (unchanged from v3)                    ║
+║    Formula:  N_l^m = √( (2l+1)/(4π) · (l−m)!/(l+m)! )                       ║
+║    Real forms: Y_l^{+m} = √2·N_l^m·P_l^m(cosθ)·cos(mφ)                     ║
+║                Y_l^{-m} = √2·N_l^m·P_l^m(cosθ)·sin(mφ)                     ║
+║    On the unit sphere: sin^n(θ)·cos(nφ) = Re[(x+iy)^n]                      ║
+║                        sin^n(θ)·sin(nφ) = Im[(x+iy)^n]                      ║
+║    All 49 Y_l^m constants verified analytically.                             ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 -->
 <html lang="en">
@@ -132,8 +140,8 @@ const vertShader = /* glsl */`
 //   1. Reads (x,y,z) from vN — the surface point on the unit sphere.
 //   2. Evaluates all 49 real spherical harmonics Y_l^m at that point (l=0..6).
 //   3. Weights each by the neural-field kernel g_l(σ): a Gaussian that
-//      suppresses high-l modes when σ is large (seizure state) and lets
-//      them through when σ is small (healthy, high-dimensional state).
+//      suppresses high-l modes when σ is large (low effective dimensionality)
+//      and lets them through when σ is small (high effective dimensionality).
 //   4. Multiplies by the time-varying amplitude a_lm(t) = A·cos(ω_l·t + φ).
 //   5. Sums all 49 weighted contributions → F, the cortical field value.
 //   6. Maps F through the colour function cmap().
@@ -155,16 +163,16 @@ const fragShader = /* glsl */`
 
   // ───────────────────────────────────────────────────────────────────────────
   // COLOUR MAP:  F ∈ [−1, +1]  →  RGB
-  //   Negative F → deep midnight navy    (inhibition)
+  //   Negative F → deep midnight navy    (inhibition-like, "below baseline")
   //   F ≈ 0      → true black            (resting; power curve keeps this dark)
-  //   Positive F → copper → gold → amber (excitation)
+  //   Positive F → copper → gold → amber (excitation-like, "above baseline")
   // Power curves: pow(u, γ>1) compresses near-zero → stays black.
   //               pow(-t, γ<1) keeps dark inhibition dark but not pure black.
   // ───────────────────────────────────────────────────────────────────────────
   vec3 cmap(float t) {
     t = clamp(t, -1.0, 1.0);
     if (t < 0.0) {
-      float s = pow(-t, 0.62);   // γ<1: inhibitory zone stays dark and moody
+      float s = pow(-t, 0.62);   // γ<1: below-baseline zone stays dark and moody
       return vec3(s*0.01, s*0.04, s*0.70);            // deep midnight navy
     }
     if (t < 0.30) {
@@ -189,49 +197,64 @@ const fragShader = /* glsl */`
     float x = n.x,  y = n.y,  z = n.z;
 
     // ── Precomputed powers — avoids redundant multiply operations on GPU ──────
-    float z2 = z*z;          // z²  — used from l=2 onward
-    float z3 = z2*z;         // z³  — used in l=3 zonal harmonic
-    float z4 = z2*z2;        // z⁴  — used in l=4 zonal and tesseral harmonics
-    float z5 = z4*z;         // z⁵  — NEW: needed in Y_5^0 and Y_6^{±1}
-    float z6 = z4*z2;        // z⁶  — NEW: needed in Y_6^0
-    float x2      = x*x;         // x²
+    float z2 = z*z;          // z²
+    float z3 = z2*z;         // z³
+    float z4 = z2*z2;        // z⁴
+    float z5 = z4*z;         // z⁵
+    float z6 = z4*z2;        // z⁶
+    float x2      = x*x;          // x²
     float y2      = y*y;          // y²
-    float xy      = x*y;          // xy    — common factor in sectoral harmonics
-    float x2y2    = x2*y2;        // x²y²  — used in l=5 and l=6 sectoral harmonics
-    float x2_m_y2 = x2 - y2;      // x²-y² — common tesseral factor
+    float xy      = x*y;          // xy
+    float x2y2    = x2*y2;        // x²y²
+    float x2_m_y2 = x2 - y2;      // x²-y²
 
 
-    // ── NEURAL-FIELD CONNECTIVITY KERNEL σ(t) ────────────────────────────────
-    // σ oscillates at ω = 0.1 = 1×w_base → one complete cycle per T_loop.
-    // σ ∈ [0.26, 0.74]:
-    //   Small σ (local coupling)  → high-l modes active  → complex healthy state
-    //   Large σ (broad coupling)  → high-l suppressed    → slow synchrony (seizure)
-    float sigma = 0.50 + 0.24 * sin(u_t * 0.1);
+    // ── CONNECTIVITY KERNEL σ(t) — EFFECTIVE-DIMENSIONALITY CONTROL ──────────
+    // σ oscillates at ω = 0.1 = 1×w_base → one complete cycle per T_LOOP.
+    // The cosine profile starts at σ_max (slow, extended patterns) at t=0,
+    // dips to σ_min mid-cycle (high effective dimensionality, fine filigree),
+    // and returns to σ_max for the seamless restart.
+    // σ ∈ [0.20, 0.80]:
+    //   Large σ → only low-l modes survive  → low effective dimensionality
+    //                                        → slow, large-scale patterns
+    //   Small σ → all 49 modes coexist      → high effective dimensionality
+    //                                        → rich multi-scale interference
+    // The kernel-width contrast is the physical phenomenon; the mapping to
+    // brain states (alpha-band synchrony, gamma-band complexity, etc.) is
+    // left as an interpretive question for the viewer.
+    float sigma = 0.50 + 0.30 * cos(u_t * 0.1);
     float s2    = sigma * sigma;   // σ² — used in all kernel exponents
 
-    // g_l = exp(−c_l · σ²),  c_l ≈ l(l+1)/2  (from Laplace-Beltrami eigenvalue l(l+1))
+    // g_l = exp(−c_l · σ²),  c_l = l(l+1)/2  (half the Laplace-Beltrami eigenvalue).
     // Higher l → larger c_l → exponential decays faster → finer modes vanish first.
     float g0 = 1.0;               // l=0: eigenvalue 0  — never suppressed
     float g1 = exp(-1.0  * s2);   // l=1: eigenvalue 2,  c=1
     float g2 = exp(-3.0  * s2);   // l=2: eigenvalue 6,  c=3
     float g3 = exp(-6.0  * s2);   // l=3: eigenvalue 12, c=6
     float g4 = exp(-10.0 * s2);   // l=4: eigenvalue 20, c=10
-    float g5 = exp(-15.0 * s2);   // l=5: eigenvalue 30, c=15  ← NEW
-    float g6 = exp(-21.0 * s2);   // l=6: eigenvalue 42, c=21  ← NEW (most suppressed)
+    float g5 = exp(-15.0 * s2);   // l=5: eigenvalue 30, c=15
+    float g6 = exp(-21.0 * s2);   // l=6: eigenvalue 42, c=21 (most suppressed)
 
 
-    // ── OSCILLATION FREQUENCIES ──────────────────────────────────────────────
-    // All ω_l = n_l × 0.1 (integers × w_base) → seamless loop at T_loop = 20π.
-    // Ratios roughly follow the neural field dispersion relation ω ∝ √(l(l+1)):
-    //   √(l(l+1)):  √2  √6  √12  √20  √30  √42
-    //   ratios:    1.00 1.73 2.45 3.16 3.87 4.58
-    float w0 = 0.2;   // l=0: n=2  — global mode, slowest
+    // ── OSCILLATION FREQUENCIES — ω ∝ √(l(l+1)) ───────────────────────────────
+    // All ω_l = n_l × 0.1 (integers × w_base) → seamless loop at T_LOOP = 20π.
+    // n_l chosen as nearest integer to (n_1/√2)·√(l(l+1)) so the ratios
+    // honestly track the Laplace–Beltrami dispersion on a unit sphere.
+    //   l        :  0    1    2    3    4    5    6
+    //   √(l(l+1)) : 0   √2   √6  √12  √20  √30  √42
+    //   target ω  : —  0.400 0.693 0.980 1.265 1.549 1.833
+    //   chosen n  : 2    4    7   10   13   15   18
+    //   actual ω  : 0.2  0.4  0.7  1.0  1.3  1.5  1.8
+    // l=0 is the constant mode and has no proper frequency; n_0=2 gives it a
+    // slow drift so the global mode isn't frozen. This is a chosen drift, not
+    // a prediction of the dispersion relation.
+    float w0 = 0.2;   // l=0: n=2  — global mode, slow drift (arbitrary)
     float w1 = 0.4;   // l=1: n=4  — dipole waves
-    float w2 = 0.7;   // l=2: n=7  — quadrupole
-    float w3 = 1.1;   // l=3: n=11 — octupole, visibly faster
-    float w4 = 1.7;   // l=4: n=17 — fine patches, fast
-    float w5 = 2.3;   // l=5: n=23 — very fine filigree, very fast   ← NEW
-    float w6 = 2.9;   // l=6: n=29 — finest detail, fastest of all   ← NEW
+    float w2 = 0.7;   // l=2: n=7  — quadrupoles
+    float w3 = 1.0;   // l=3: n=10 — octupoles
+    float w4 = 1.3;   // l=4: n=13 — 16-poles
+    float w5 = 1.5;   // l=5: n=15 — 32-poles
+    float w6 = 1.8;   // l=6: n=18 — 64-poles (finest spatial scale)
 
 
     // ── TIME-VARYING AMPLITUDES  a_lm(t) = A·cos(ω_l·t + φ_lm) ─────────────
@@ -275,7 +298,7 @@ const fragShader = /* glsl */`
     float a4h  = 0.41 * cos(w4*u_t + 2.78);
     float a4i  = 0.43 * cos(w4*u_t + 0.33);
 
-    // l=5 (11 modes) — NEW in v3. Amplitudes ≈ 0.32–0.38.
+    // l=5 (11 modes). Amplitudes ≈ 0.32–0.38.
     float a5a  = 0.35 * cos(w5*u_t + 0.71);   // m=-5
     float a5b  = 0.33 * cos(w5*u_t + 2.94);   // m=-4
     float a5c  = 0.36 * cos(w5*u_t + 1.15);   // m=-3
@@ -288,7 +311,7 @@ const fragShader = /* glsl */`
     float a5j  = 0.33 * cos(w5*u_t + 0.89);   // m=+4
     float a5k  = 0.36 * cos(w5*u_t + 3.57);   // m=+5
 
-    // l=6 (13 modes) — NEW in v3. Amplitudes ≈ 0.25–0.30.
+    // l=6 (13 modes). Amplitudes ≈ 0.25–0.30.
     float a6a  = 0.27 * cos(w6*u_t + 1.33);   // m=-6
     float a6b  = 0.29 * cos(w6*u_t + 4.16);   // m=-5
     float a6c  = 0.26 * cos(w6*u_t + 0.74);   // m=-4
@@ -343,96 +366,49 @@ const fragShader = /* glsl */`
     float Y43  = 1.77013 * x*z*(x2 - 3.0*y2);
     float Y44  = 0.62584 * (x2*x2 - 6.0*x2y2 + y2*y2);
 
-    // ── l=5 (32-poles: five nodal circles each) — NEW ─────────────────────────
-    // Constant derivation: c = √2 · N_l^m · (d^m P_5 / dz^m  coefficient)
-    // Key: sin^n(θ)·cos(nφ) = Re[(x+iy)^n],  sin^n(θ)·sin(nφ) = Im[(x+iy)^n]
-    //
+    // l=5 (32-poles: five nodal circles each)
     // m=±5: sectoral — 10-lobe equatorial star
-    //   d⁵P_5/dz⁵ = 945;  N_5^5 = 4.913×10⁻⁴
-    //   c = √2·N_5^5·945 = 0.65669
-    //   Re[(x+iy)^5] = x(x⁴-10x²y²+5y⁴),  Im[(x+iy)^5] = y(5x⁴-10x²y²+y⁴)
     float Y5m5 = 0.65669 * y*(5.0*x2*x2 - 10.0*x2y2 + y2*y2);
     float Y55  = 0.65669 * x*(x2*x2 - 10.0*x2y2 + 5.0*y2*y2);
-
     // m=±4: 8-lobe star × z latitude factor
-    //   d⁴P_5/dz⁴ = 945z;  N_5^4 = 1.554×10⁻³
-    //   c = √2·N_5^4·945 = 2.0767;  Im[(x+iy)^4] = 4xy(x²-y²), so ×4 for m=-4
-    float Y5m4 = 8.3068  * xy*x2_m_y2*z;   // 2.0767 × 4 = 8.3068
+    float Y5m4 = 8.3068  * xy*x2_m_y2*z;
     float Y54  = 2.0767  * z*(x2*x2 - 6.0*x2y2 + y2*y2);
-
     // m=±3: trefoil × (9z²-1) latitude envelope
-    //   d³P_5/dz³ = 52.5(9z²-1);  N_5^3 = 6.589×10⁻³
-    //   c = √2·N_5^3·52.5 = 0.48927
     float Y5m3 = 0.48927 * y*(3.0*x2 - y2)*(9.0*z2 - 1.0);
     float Y53  = 0.48927 * x*(x2 - 3.0*y2)*(9.0*z2 - 1.0);
-
     // m=±2: z·(3z²-1) × xy or (x²-y²)
-    //   d²P_5/dz² = 52.5z(3z²-1);  N_5^2 = 0.032280
-    //   c = √2·N_5^2·52.5 = 2.3966;  sin²θ·sin(2φ)=2xy so ×2 for m=-2
-    float Y5m2 = 4.7932  * xy*z*(3.0*z2 - 1.0);   // 2.3966 × 2 = 4.7932
+    float Y5m2 = 4.7932  * xy*z*(3.0*z2 - 1.0);
     float Y52  = 2.3966  * z*x2_m_y2*(3.0*z2 - 1.0);
-
     // m=±1: (21z⁴-14z²+1) latitude polynomial × x or y
-    //   d¹P_5/dz¹ = (1/8)(315z⁴-210z²+15) = (15/8)(21z⁴-14z²+1);  N_5^1 = 0.17085
-    //   c = √2·N_5^1·(15/8) = 0.45315
     float Y5m1 = 0.45315 * y*(21.0*z4 - 14.0*z2 + 1.0);
     float Y51  = 0.45315 * x*(21.0*z4 - 14.0*z2 + 1.0);
-
     // m=0: zonal — 5 alternating latitude stripes
-    //   P_5(z)=(1/8)(63z⁵-70z³+15z);  N_5^0 = 0.93561
-    //   c = 0.93561/8 = 0.11695
     float Y50  = 0.11695 * z*(63.0*z4 - 70.0*z2 + 15.0);
 
 
-    // ── l=6 (64-poles: six nodal circles each) — NEW ──────────────────────────
-    // Finest spatial frequency in this simulation — gamma-band-like cortical scale.
-    // Constant derivation: c = √2 · N_l^m · (d^m P_6 / dz^m  coefficient)
-    //
-    // Need x⁴, y⁴ for the sectoral (|m|=6,5) harmonics.
+    // l=6 (64-poles: six nodal circles each) — finest spatial frequency
     float x4 = x2*x2;   // x⁴
     float y4 = y2*y2;   // y⁴
 
     // m=±6: 12-lobe equatorial star (sectoral — no z dependence)
-    //   d⁶P_6/dz⁶ = 10395;  N_6^6 = 4.648×10⁻⁵
-    //   c = √2·N_6^6·10395 = 0.68322
-    //   Re[(x+iy)^6] = x⁶-15x⁴y²+15x²y⁴-y⁶
-    //   Im[(x+iy)^6] = 2xy(3x⁴-10x²y²+3y⁴)  → ×2 for m=-6
-    float Y6m6 = 1.36644 * xy*(3.0*x4 - 10.0*x2y2 + 3.0*y4);   // 0.68322 × 2
+    float Y6m6 = 1.36644 * xy*(3.0*x4 - 10.0*x2y2 + 3.0*y4);
     float Y66  = 0.68322 * (x4*x2 - 15.0*x4*y2 + 15.0*x2*y4 - y4*y2);
-
     // m=±5: 10-lobe star × z latitude factor
-    //   d⁵P_6/dz⁵ = 10395z;  N_6^5 = 1.610×10⁻⁴
-    //   c = √2·N_6^5·10395 = 2.3671
     float Y6m5 = 2.3671 * y*z*(5.0*x4 - 10.0*x2y2 + y4);
     float Y65  = 2.3671 * x*z*(x4 - 10.0*x2y2 + 5.0*y4);
-
     // m=±4: (11z²-1) latitude envelope × 8-lobe azimuthal pattern
-    //   d⁴P_6/dz⁴ = (945/2)(11z²-1);  N_6^4 = 7.552×10⁻⁴
-    //   c = √2·N_6^4·(945/2) = 0.50467;  Im[(x+iy)^4]=4xy(x²-y²) → ×4 for m=-4
-    float Y6m4 = 2.01868 * xy*x2_m_y2*(11.0*z2 - 1.0);   // 0.50467 × 4
+    float Y6m4 = 2.01868 * xy*x2_m_y2*(11.0*z2 - 1.0);
     float Y64  = 0.50467 * (11.0*z2 - 1.0)*(x4 - 6.0*x2y2 + y4);
-
     // m=±3: z·(11z²-3) latitude band × trefoil azimuthal pattern
-    //   d³P_6/dz³ = (315/2)z(11z²-3);  N_6^3 = 4.139×10⁻³
-    //   c = √2·N_6^3·(315/2) = 0.92174
     float Y6m3 = 0.92174 * y*z*(3.0*x2 - y2)*(11.0*z2 - 3.0);
     float Y63  = 0.92174 * x*z*(x2 - 3.0*y2)*(11.0*z2 - 3.0);
-
     // m=±2: (33z⁴-18z²+1) latitude polynomial × (x²-y²) or 2xy
-    //   d²P_6/dz² = (105/8)(33z⁴-18z²+1);  N_6^2 = 0.024814
-    //   c = √2·N_6^2·(105/8) = 0.46065;  ×2 for m=-2
-    float Y6m2 = 0.92130 * xy*(33.0*z4 - 18.0*z2 + 1.0);   // 0.46065 × 2
+    float Y6m2 = 0.92130 * xy*(33.0*z4 - 18.0*z2 + 1.0);
     float Y62  = 0.46065 * x2_m_y2*(33.0*z4 - 18.0*z2 + 1.0);
-
     // m=±1: z·(33z⁴-30z²+5) latitude polynomial × x or y
-    //   d¹P_6/dz¹ = (21/8)z(33z⁴-30z²+5);  N_6^1 = 0.15695
-    //   c = √2·N_6^1·(21/8) = 0.58262
     float Y6m1 = 0.58262 * y*z*(33.0*z4 - 30.0*z2 + 5.0);
     float Y61  = 0.58262 * x*z*(33.0*z4 - 30.0*z2 + 5.0);
-
     // m=0: zonal — 6 alternating latitude stripes
-    //   P_6(z)=(1/16)(231z⁶-315z⁴+105z²-5);  N_6^0 = 1.01713
-    //   c = 1.01713/16 = 0.063571
     float Y60  = 0.063571 * (231.0*z6 - 315.0*z4 + 105.0*z2 - 5.0);
 
 
@@ -459,12 +435,10 @@ const fragShader = /* glsl */`
       + g4 * (a4a*Y4m4 + a4b*Y4m3 + a4c*Y4m2 + a4d*Y4m1 + a4e*Y40
             + a4f*Y41  + a4g*Y42  + a4h*Y43  + a4i*Y44)
 
-      // l=5: 11 thirty-two-pole modes  (NEW)
       + g5 * (a5a*Y5m5 + a5b*Y5m4 + a5c*Y5m3 + a5d*Y5m2 + a5e*Y5m1
             + a5f*Y50
             + a5g*Y51  + a5h*Y52  + a5i*Y53  + a5j*Y54  + a5k*Y55)
 
-      // l=6: 13 sixty-four-pole modes  (NEW)
       + g6 * (a6a*Y6m6 + a6b*Y6m5 + a6c*Y6m4 + a6d*Y6m3 + a6e*Y6m2
             + a6f*Y6m1
             + a6g*Y60
@@ -472,7 +446,6 @@ const fragShader = /* glsl */`
             + a6m*Y66);
 
     // Scale to fill [−1,+1] for the colour map.
-    // Reduced from 3.0 to 2.8 vs v2: the 24 new modes add marginal raw amplitude.
     F = clamp(F * 2.8, -1.0, 1.0);
 
     vec3 col = cmap(F);
@@ -573,34 +546,50 @@ onResize();
 // ═════════════════════════════════════════════════════════════════════════════
 // SECTION 9 — ANIMATION LOOP
 //
-// SEAMLESS LOOP: t = (t + dt) % T_LOOP
-//   T_LOOP = 20π ≈ 62.83 sim-units.  All ω_l = n_l × 0.1 are integer multiples
-//   of w_base, so cos(ω_l·T_LOOP + φ) = cos(2πn_l + φ) = cos(φ) — exact reset.
-//   Real-time duration ≈ 62.83 / (0.022 × 60fps) ≈ 47.6 seconds per loop.
+// MATHEMATICALLY EXACT SEAMLESS LOOP
+//   Driven by an integer frame counter, not by accumulated floating-point t.
+//   N_FRAMES = 3600 at 60 fps → one full cycle = 60.0 seconds in real time.
+//   T_LOOP   = 20π sim-time units → ω_base = 0.1.
+//   dt       = T_LOOP / N_FRAMES = π/180 sim-units per frame, exactly.
+//   Every cosine in the shader returns to its exact starting value at the wrap
+//   because (a) every ω_l is an integer multiple of ω_base, and (b) at frame
+//   N_FRAMES the time t reaches T_LOOP exactly, and we reset frame → 0 with
+//   no accumulated floating-point error.
 //
-// ROTATION: Y-axis slow spin + X-axis sinusoidal tilt at w = 0.1 = w_base
-//   → tilt also resets seamlessly at T_LOOP (sin loops with the same period).
+// TEMPORAL ENVELOPE
+//   The σ kernel-width follows cos(0.1·t), starting at σ_max = 0.80 at t=0
+//   (slow, large-scale patterns) and dipping to σ_min = 0.20 at t = T_LOOP/2
+//   (rich multi-scale interference), before returning to σ_max at t = T_LOOP.
+//   This is the "slow → complex → slow" arc the cycle is designed around.
+//
+// Y-AXIS ROTATION locked to one full turn per cycle (ω_y = 2π/T_LOOP = 0.1):
+//   the visual state — sphere shading plus orientation — is truly periodic.
+// X-AXIS TILT is a sin at ω = 0.1, also period T_LOOP → resets seamlessly.
 // ═════════════════════════════════════════════════════════════════════════════
 
-const T_LOOP = 20.0 * Math.PI;   // loop period: 2π / w_base = 2π / 0.1 = 20π
-const dt = 0.022;                 // time step per frame
-let t = 0.0;
+const T_LOOP   = 20.0 * Math.PI;        // 20π ≈ 62.832 sim-time units
+const N_FRAMES = 3600;                   // 60 fps × 60 seconds
+const dt       = T_LOOP / N_FRAMES;      // exactly π/180 sim-units per frame
+
+let frame = 0;                            // integer counter — no FP drift
 
 const sphereMesh = scene.children.find(c => c.isMesh && c.material === mat);
 
 function animate() {
   requestAnimationFrame(animate);
 
-  // Advance time and wrap at T_LOOP — the modulo makes the loop mathematically exact.
-  t = (t + dt) % T_LOOP;
+  // Advance the integer counter and wrap at N_FRAMES. Time t is derived fresh
+  // from frame each call, so accumulated floating-point error cannot build up.
+  frame = (frame + 1) % N_FRAMES;
+  const t = frame * dt;
 
-  // Send time to GPU. This single uniform is the only CPU→GPU transfer per frame.
+  // Send time to GPU — the only CPU→GPU transfer per frame.
   mat.uniforms.u_t.value = t;
 
   if (sphereMesh) {
-    // Y-axis: slow constant rotation, revealing all azimuths of the eigenmode pattern.
-    sphereMesh.rotation.y += 0.0016;
-    // X-axis: sinusoidal tilt at w=0.1 → period=T_LOOP → resets seamlessly.
+    // Y-axis: one full 2π turn per T_LOOP → visual state truly periodic.
+    sphereMesh.rotation.y = t * (2.0 * Math.PI / T_LOOP);
+    // X-axis: small sinusoidal tilt at ω=0.1 → also period T_LOOP, seamless.
     sphereMesh.rotation.x = 0.14 + 0.05 * Math.sin(t * 0.1);
   }
 
