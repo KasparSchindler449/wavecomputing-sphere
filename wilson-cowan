@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveComputing — Wilson-Cowan</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;min-height:100vh;background:#000;overflow:hidden;}
+canvas{display:block;position:fixed;top:0;left:0;width:100vw;height:100vh;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2.0));
+renderer.setClearColor(0x000000,1);
+const scene=new THREE.Scene();
+const CAM_Z=6.8, FIT_R=2.30;
+const camera=new THREE.PerspectiveCamera(38,1,0.1,200);
+camera.position.z=CAM_Z;
+(function buildStars(){
+  const N=1800,pos=new Float32Array(N*3),col=new Float32Array(N*3);
+  for(let i=0;i<N;i++){
+    const theta=Math.random()*2*Math.PI;
+    const phi=Math.acos(2*Math.random()-1);
+    const r=55+Math.random()*40;
+    pos[i*3]=r*Math.sin(phi)*Math.cos(theta);
+    pos[i*3+1]=r*Math.sin(phi)*Math.sin(theta);
+    pos[i*3+2]=r*Math.cos(phi);
+    col[i*3]=0.52+Math.random()*0.38;
+    col[i*3+1]=0.54+Math.random()*0.36;
+    col[i*3+2]=0.62+Math.random()*0.38;
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+  scene.add(new THREE.Points(geo,new THREE.PointsMaterial({vertexColors:true,size:0.055,transparent:true,opacity:0.60,sizeAttenuation:true})));
+})();
+const SIM_RES=384;
+const rt_opts={format:THREE.RGBAFormat,type:THREE.HalfFloatType,minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,wrapS:THREE.RepeatWrapping,wrapT:THREE.ClampToEdgeWrapping,depthBuffer:false,stencilBuffer:false};
+let rt_A=new THREE.WebGLRenderTarget(SIM_RES,SIM_RES,rt_opts);
+let rt_B=new THREE.WebGLRenderTarget(SIM_RES,SIM_RES,rt_opts);
+const sim_camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+const quad_vert=`varying vec2 vUV;void main(){vUV=uv;gl_Position=vec4(position.xy,0.0,1.0);}`;
+const init_frag=`
+  precision highp float;
+  varying vec2 vUV;
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+  void main(){
+    float E=0.25+0.35*hash(vUV*73.0);
+    float I=0.25+0.35*hash(vUV*73.0+vec2(7.13,3.71));
+    gl_FragColor=vec4(E,I,0.0,1.0);
+  }
+`;
+const init_mat=new THREE.ShaderMaterial({vertexShader:quad_vert,fragmentShader:init_frag});
+const init_scene=new THREE.Scene();
+init_scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),init_mat));
+renderer.setRenderTarget(rt_A);
+renderer.render(init_scene,sim_camera);
+renderer.setRenderTarget(null);
+const sim_frag=`
+  precision highp float;
+  uniform sampler2D u_state;
+  uniform float u_dt;
+  uniform float u_time;
+  varying vec2 vUV;
+  float sig(float x){return 1.0/(1.0+exp(-x));}
+  vec2 wrapUV(vec2 uv){return vec2(fract(uv.x),clamp(uv.y,0.0,1.0));}
+  void main(){
+    vec2 uv=vUV;
+    float dx=1.0/384.0;
+    vec4 c=texture2D(u_state,uv);
+    float E=c.r, I=c.g;
+    vec4 cL=texture2D(u_state,wrapUV(uv+vec2(-dx,0.0)));
+    vec4 cR=texture2D(u_state,wrapUV(uv+vec2(dx,0.0)));
+    vec4 cD=texture2D(u_state,wrapUV(uv+vec2(0.0,-dx)));
+    vec4 cU=texture2D(u_state,wrapUV(uv+vec2(0.0,dx)));
+    float lapE=cL.r+cR.r+cD.r+cU.r-4.0*E;
+    float lapI=cL.g+cR.g+cD.g+cU.g-4.0*I;
+    float w_EE=12.0, w_EI=10.0, w_IE=10.0, w_II=2.0;
+    float h_E=-2.0, h_I=-3.0;
+    float tau_E=1.0, tau_I=3.5;
+    float D_E=2.0e-5, D_I=6.0e-5;
+    float drive=0.5+0.35*cos(u_time*0.08);
+    float input_E=w_EE*E-w_EI*I+h_E+drive;
+    float input_I=w_IE*E-w_II*I+h_I;
+    float dE=(-E+sig(input_E))/tau_E + D_E*lapE/(dx*dx);
+    float dI=(-I+sig(input_I))/tau_I + D_I*lapI/(dx*dx);
+    E=clamp(E+u_dt*dE,0.0,1.0);
+    I=clamp(I+u_dt*dI,0.0,1.0);
+    gl_FragColor=vec4(E,I,0.0,1.0);
+  }
+`;
+const sim_mat=new THREE.ShaderMaterial({
+  vertexShader:quad_vert,
+  fragmentShader:sim_frag,
+  uniforms:{u_state:{value:rt_A.texture},u_dt:{value:0.025},u_time:{value:0.0}}
+});
+const sim_scene=new THREE.Scene();
+sim_scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),sim_mat));
+const display_vert=`
+  varying vec3 vN;
+  varying vec3 vVN;
+  void main(){
+    vN=normalize(normal);
+    vVN=normalize(normalMatrix*normal);
+    gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);
+  }
+`;
+const display_frag=`
+  precision highp float;
+  varying vec3 vN;
+  varying vec3 vVN;
+  uniform sampler2D u_state;
+  vec3 cmap(float t){
+    t=clamp(t,-1.0,1.0);
+    if(t<0.0){float s=pow(-t,0.62);return vec3(s*0.01,s*0.04,s*0.70);}
+    if(t<0.30){float u=pow(t/0.30,1.8);return vec3(u*0.34,u*0.11,u*0.01);}
+    if(t<0.64){float u=(t-0.30)/0.34;return vec3(0.34+u*0.52,0.11+u*0.54,0.01);}
+    float u=(t-0.64)/0.36;return vec3(0.86+u*0.14,0.65+u*0.31,0.01+u*0.15);
+  }
+  void main(){
+    vec3 n=normalize(vN);
+    float phi=atan(n.z,n.x);
+    float theta=acos(clamp(n.y,-1.0,1.0));
+    vec2 uv=vec2((phi+3.14159265)/6.28318530, theta/3.14159265);
+    vec4 state=texture2D(u_state,uv);
+    float E=state.r, I=state.g;
+    float field=(E-I)*1.8;
+    vec3 col=cmap(field);
+    float diff=0.93+0.07*clamp(dot(n,normalize(vec3(0.4,0.7,1.0))),0.0,1.0);
+    col*=diff;
+    float rimGlow=pow(1.0-abs(vVN.z),3.2);
+    col+=rimGlow*vec3(0.22,0.09,0.01);
+    float facing=abs(vVN.z);
+    float limb=pow(facing,0.36);
+    col*=(0.18+0.82*limb);
+    gl_FragColor=vec4(col,1.0);
+  }
+`;
+const display_mat=new THREE.ShaderMaterial({vertexShader:display_vert,fragmentShader:display_frag,uniforms:{u_state:{value:rt_A.texture}}});
+const sphere=new THREE.Mesh(new THREE.SphereGeometry(1.52,180,180),display_mat);
+scene.add(sphere);
+const makeHalo=(radius,power,alpha,r,g,b)=>{
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(radius,48,48),new THREE.ShaderMaterial({
+    vertexShader:`varying vec3 vVN;void main(){vVN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+    fragmentShader:`precision mediump float;varying vec3 vVN;void main(){float rim=1.0-abs(vVN.z);float a=pow(rim,${power.toFixed(1)})*${alpha.toFixed(2)};gl_FragColor=vec4(${r.toFixed(2)},${g.toFixed(2)},${b.toFixed(2)},a);}`,
+    transparent:true,blending:THREE.AdditiveBlending,side:THREE.BackSide,depthWrite:false,
+  })));
+};
+makeHalo(1.78,2.5,0.44,0.01,0.04,0.50);
+makeHalo(2.18,1.5,0.14,0.01,0.02,0.32);
+function onResize(){
+  const W=window.innerWidth||300,H=window.innerHeight||300;
+  renderer.setSize(W,H,false);
+  camera.aspect=W/H;
+  const halfRad=(camera.aspect>=1)?Math.atan(FIT_R/CAM_Z):Math.atan(FIT_R/(camera.aspect*CAM_Z));
+  camera.fov=2*halfRad*(180/Math.PI);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize',onResize);
+onResize();
+const SUBSTEPS=6;
+let read=rt_A, write=rt_B;
+let simTime=0;
+function animate(){
+  requestAnimationFrame(animate);
+  for(let i=0;i<SUBSTEPS;i++){
+    sim_mat.uniforms.u_state.value=read.texture;
+    sim_mat.uniforms.u_time.value=simTime;
+    renderer.setRenderTarget(write);
+    renderer.render(sim_scene,sim_camera);
+    const tmp=read; read=write; write=tmp;
+    simTime+=sim_mat.uniforms.u_dt.value;
+  }
+  display_mat.uniforms.u_state.value=read.texture;
+  renderer.setRenderTarget(null);
+  sphere.rotation.y=simTime*0.003;
+  sphere.rotation.x=0.14;
+  renderer.render(scene,camera);
+}
+animate();
+</script>
+</body>
+</html>
