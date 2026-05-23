@@ -70,10 +70,18 @@ const fragShader=`
     float x4=x2*x2;float y4=y2*y2;float x6=x4*x2;float y6=y4*y2;float x8=x4*x4;float y8=y4*y4;
     float sigma=0.475+0.325*cos(u_t*0.1);
     float s2=sigma*sigma;
-    float g0=1.0;
-    float g1=exp(-1.0*s2);float g2=exp(-3.0*s2);float g3=exp(-6.0*s2);
-    float g4=exp(-10.0*s2);float g5=exp(-15.0*s2);float g6=exp(-21.0*s2);
-    float g7=exp(-28.0*s2);float g8=exp(-36.0*s2);float g9=exp(-45.0*s2);float g10=exp(-55.0*s2);
+    float peak=smoothstep(0.40,0.15,sigma);
+    float g0=1.0*(1.0-0.5*peak);
+    float g1=exp(-1.0*s2)*(1.0-0.3*peak);
+    float g2=exp(-3.0*s2)*(1.0-0.15*peak);
+    float g3=exp(-6.0*s2);
+    float g4=exp(-10.0*s2);
+    float g5=exp(-15.0*s2);
+    float g6=exp(-21.0*s2);
+    float g7=exp(-28.0*s2)*(1.0+0.7*peak);
+    float g8=exp(-36.0*s2)*(1.0+1.2*peak);
+    float g9=exp(-45.0*s2)*(1.0+1.8*peak);
+    float g10=exp(-55.0*s2)*(1.0+2.5*peak);
     float a00=0.80*cos(0.2*u_t+0.72);
     float a1m=0.70*cos(0.4*u_t+1.38);float a10=0.65*cos(0.4*u_t+2.51);float a1p=0.75*cos(0.4*u_t+0.18);
     float a2mm=0.62*cos(0.6*u_t+3.14);float a2m=0.68*cos(0.7*u_t+0.93);float a20=0.72*cos(0.7*u_t+1.87);float a2p=0.64*cos(0.7*u_t+4.21);float a2pp=0.66*cos(0.8*u_t+2.76);
@@ -107,7 +115,10 @@ const fragShader=`
       +g8*(a8a*Y8m8+a8b*Y8m7+a8c*Y8m6+a8d*Y8m5+a8e*Y8m4+a8f*Y8m3+a8g*Y8m2+a8h*Y8m1+a8i*Y80+a8j*Y81+a8k*Y82+a8l*Y83+a8m*Y84+a8n*Y85+a8o*Y86+a8p*Y87+a8q*Y88)
       +g9*(a9a*Y9m9+a9b*Y9m8+a9c*Y9m7+a9d*Y9m6+a9e*Y9m5+a9f*Y9m4+a9g*Y9m3+a9h*Y9m2+a9i*Y9m1+a9j*Y90+a9k*Y91+a9l*Y92+a9m*Y93+a9n*Y94+a9o*Y95+a9p*Y96+a9q*Y97+a9r*Y98+a9s*Y99)
       +g10*(aAa*YAm10+aAb*YAm9+aAc*YAm8+aAd*YAm7+aAe*YAm6+aAf*YAm5+aAg*YAm4+aAh*YAm3+aAi*YAm2+aAj*YAm1+aAk*YA0+aAl*YA1+aAm*YA2+aAn*YA3+aAo*YA4+aAp*YA5+aAq*YA6+aAr*YA7+aAs*YA8+aAt*YA9+aAu*YA10);
-    F=F+(0.3*g6)*F*F*F;
+    float F2=F*F;
+    float F3=F2*F;
+    float cubic=0.5+0.5*peak;
+    F=F+cubic*F3+0.12*peak*F3*F2;
     F=clamp(F*2.4,-1.0,1.0);
     vec3 col=cmap(F);
     float diff=0.93+0.07*clamp(dot(n,normalize(vec3(0.4,0.7,1.0))),0.0,1.0);
