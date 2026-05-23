@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WaveComputing — Wilson-Cowan v3</title>
+<title>WaveComputing — FitzHugh-Nagumo</title>
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
 html,body{width:100%;height:100%;min-height:100vh;background:#000;overflow:hidden;}
@@ -49,11 +49,12 @@ const quad_vert=`varying vec2 vUV;void main(){vUV=uv;gl_Position=vec4(position.x
 const init_frag=`
   precision highp float;
   varying vec2 vUV;
-  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
   void main(){
-    float E=0.30*hash(vUV*73.0);
-    float I=0.08+0.05*hash(vUV*73.0+vec2(7.13,3.71));
-    gl_FragColor=vec4(E,I,0.0,1.0);
+    float u_step=smoothstep(0.40,0.60,vUV.y);
+    float v_step=smoothstep(0.40,0.60,vUV.x);
+    float u=mix(-1.1, 1.0, u_step);
+    float v=mix(-0.67, 0.667, v_step);
+    gl_FragColor=vec4(u,v,0.0,1.0);
   }
 `;
 const init_mat=new THREE.ShaderMaterial({vertexShader:quad_vert,fragmentShader:init_frag});
@@ -68,39 +69,33 @@ const sim_frag=`
   uniform float u_dt;
   uniform float u_time;
   varying vec2 vUV;
-  float sig(float x){return 1.0/(1.0+exp(-x));}
-  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
   vec2 wrapUV(vec2 uv){return vec2(fract(uv.x),clamp(uv.y,0.0,1.0));}
   void main(){
     vec2 uv=vUV;
     float dx=1.0/256.0;
     vec4 c=texture2D(u_state,uv);
-    float E=c.r, I=c.g;
+    float u=c.r, v=c.g;
     vec4 cL=texture2D(u_state,wrapUV(uv+vec2(-dx,0.0)));
     vec4 cR=texture2D(u_state,wrapUV(uv+vec2(dx,0.0)));
     vec4 cD=texture2D(u_state,wrapUV(uv+vec2(0.0,-dx)));
     vec4 cU=texture2D(u_state,wrapUV(uv+vec2(0.0,dx)));
-    float lapE=cL.r+cR.r+cD.r+cU.r-4.0*E;
-    float lapI=cL.g+cR.g+cD.g+cU.g-4.0*I;
-    float w_EE=13.0, w_EI=14.0, w_IE=12.0, w_II=1.0;
-    float h_E=-3.8, h_I=-3.0;
-    float tau_E=1.0, tau_I=5.0;
-    float D_E=1.5e-4, D_I=1.0e-5;
-    float drive=0.5+0.2*cos(u_time*0.08);
-    float input_E=w_EE*E-w_EI*I+h_E+drive;
-    float input_I=w_IE*E-w_II*I+h_I;
-    float dE=(-E+sig(input_E))/tau_E + D_E*lapE/(dx*dx);
-    float dI=(-I+sig(input_I))/tau_I + D_I*lapI/(dx*dx);
-    float noise=(hash(uv*256.0+vec2(fract(u_time*0.7),fract(u_time*1.13)))-0.5)*0.012;
-    E=clamp(E+u_dt*dE+noise,0.0,1.0);
-    I=clamp(I+u_dt*dI,0.0,1.0);
-    gl_FragColor=vec4(E,I,0.0,1.0);
+    float lapU=cL.r+cR.r+cD.r+cU.r-4.0*u;
+    float eps=0.20;
+    float a=0.7;
+    float b=0.6;
+    float I_ext=0.0+0.08*cos(u_time*0.06);
+    float D=1.5e-4;
+    float dudt = u - u*u*u/3.0 - v + I_ext + D*lapU/(dx*dx);
+    float dvdt = eps*(u + a - b*v);
+    u=clamp(u+u_dt*dudt, -3.0, 3.0);
+    v=clamp(v+u_dt*dvdt, -3.0, 3.0);
+    gl_FragColor=vec4(u,v,0.0,1.0);
   }
 `;
 const sim_mat=new THREE.ShaderMaterial({
   vertexShader:quad_vert,
   fragmentShader:sim_frag,
-  uniforms:{u_state:{value:rt_A.texture},u_dt:{value:0.02},u_time:{value:0.0}}
+  uniforms:{u_state:{value:rt_A.texture},u_dt:{value:0.025},u_time:{value:0.0}}
 });
 const sim_scene=new THREE.Scene();
 sim_scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),sim_mat));
@@ -131,8 +126,8 @@ const display_frag=`
     float theta=acos(clamp(n.y,-1.0,1.0));
     vec2 uv=vec2((phi+3.14159265)/6.28318530, theta/3.14159265);
     vec4 state=texture2D(u_state,uv);
-    float E=state.r, I=state.g;
-    float field=(E-I)*1.5;
+    float u_val=state.r;
+    float field=u_val*0.55;
     vec3 col=cmap(field);
     float diff=0.93+0.07*clamp(dot(n,normalize(vec3(0.4,0.7,1.0))),0.0,1.0);
     col*=diff;
@@ -166,7 +161,7 @@ function onResize(){
 }
 window.addEventListener('resize',onResize);
 onResize();
-const SUBSTEPS=8;
+const SUBSTEPS=6;
 let read=rt_A, write=rt_B;
 let simTime=0;
 function animate(){
