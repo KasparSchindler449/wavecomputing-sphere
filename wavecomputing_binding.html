@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveComputing — Binding</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;min-height:100vh;background:#000;overflow:hidden;}
+canvas{display:block;position:fixed;top:0;left:0;width:100vw;height:100vh;}
+#fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  color:#A8BCE8;font:400 15px/1.5 system-ui,sans-serif;text-align:center;padding:2rem;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fallback">This visualization needs WebGL. Try a recent browser with hardware acceleration enabled.</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ------------------------------------------------------------------ *
+ *  WaveComputing — nonlinear BINDING on a sphere
+ *
+ *  Linear part (as before): three transient sources radiate thin wave
+ *  packets that propagate, interfere, and (for the long source)
+ *  reconverge at the antipode. Everything there is additive: waves
+ *  pass through one another and leave no trace.
+ *
+ *  Nonlinear part (new): a quadratic coupling multiplies source
+ *  packets pairwise. Multiplication (unlike addition) creates NEW
+ *  sum/difference frequencies that exist ONLY where two fronts
+ *  overlap -- a distinct third thing marking the conjunction.
+ *    - eps * sum_{i<j} psi_i psi_j  is folded into the height field
+ *      (the honest sideband: extra fine ripples at coincidences)
+ *    - a saturated envelope-product  sum_{i<j} E_i E_j  is drawn as a
+ *      hot white-gold flare: the visible "these two are BOUND here".
+ *  Set EPS=0 and BIND_GAIN=0 to recover the purely linear sphere.
+ * ------------------------------------------------------------------ */
+
+const canvas = document.getElementById('c');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true, powerPreference:'high-performance'});
+} catch(e) {
+  document.getElementById('fallback').style.display = 'flex';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2.0));
+renderer.setClearColor(0x000000, 1);
+
+const scene = new THREE.Scene();
+const CAM_Z = 6.8, FIT_R = 2.30;
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
+camera.position.z = CAM_Z;
+
+/* ---------- global parameters ---------- */
+const NUM     = 3;
+const R       = 1.52;
+const SPEED   = 0.45;
+const T_LOOP  = 16.0;
+const DISP    = 0.028;
+const SEG     = 256;
+const COLSCALE= 0.90;
+const ROT_TURNS_PER_LOOP = 0.5;
+
+/* ---------- nonlinear binding parameters ----------
+ *  EPS        : strength of the bound sideband added to the field
+ *               (0 = linear; larger = stronger new-frequency ripples)
+ *  BIND_GAIN  : saturation sensitivity of the coincidence flare
+ *  BIND_THRESH: overlap below this doesn't count as binding
+ *  BIND_STR   : brightness of the white-gold bound-marker
+ * -------------------------------------------------- */
+const EPS       = 0.80;
+const BIND_GAIN = 3.0;
+const BIND_THRESH= 0.10;
+const BIND_STR  = 0.95;
+
+/* ---------- per-source "voices" ---------- */
+const srcP   = [16.0/3.0, 4.0,  8.0 ];
+const srcOff = [0.0,      1.3,  3.0 ];
+const srcW   = [0.18,     0.11, 0.30];
+const srcKr  = [26.0,     30.0, 22.0];
+const srcDec = [0.70,     1.10, 0.22];
+const srcAmp = [1.00,     0.90, 1.00];
+
+/* ---------- source placement: tilted near-equilateral triangle ---------- */
+const axis = new THREE.Vector3(0.0, 0.35, 1.0).normalize();
+let U = new THREE.Vector3(1,0,0);
+U.sub(axis.clone().multiplyScalar(axis.dot(U))).normalize();
+const Vv = axis.clone().cross(U).normalize();
+const beta = 55.0*Math.PI/180.0;
+const srcPos = [90,210,330].map(deg=>{
+  const ph = deg*Math.PI/180.0;
+  return axis.clone().multiplyScalar(Math.cos(beta))
+    .add(U.clone().multiplyScalar(Math.sin(beta)*Math.cos(ph)))
+    .add(Vv.clone().multiplyScalar(Math.sin(beta)*Math.sin(ph)))
+    .normalize();
+});
+
+/* ---------- starfield ---------- */
+(function buildStars(){
+  const N=1400, pos=new Float32Array(N*3), col=new Float32Array(N*3);
+  for(let i=0;i<N;i++){
+    const theta=Math.random()*2*Math.PI, phi=Math.acos(2*Math.random()-1);
+    const rr=55+Math.random()*40;
+    pos[i*3]=rr*Math.sin(phi)*Math.cos(theta);
+    pos[i*3+1]=rr*Math.sin(phi)*Math.sin(theta);
+    pos[i*3+2]=rr*Math.cos(phi);
+    col[i*3]=0.52+Math.random()*0.38; col[i*3+1]=0.54+Math.random()*0.36; col[i*3+2]=0.62+Math.random()*0.38;
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  g.setAttribute('color',new THREE.BufferAttribute(col,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({vertexColors:true,size:0.055,transparent:true,opacity:0.55,sizeAttenuation:true})));
+})();
+
+/* ---------- field with linear part + nonlinear binding ---------- */
+const fieldGLSL = `
+  #define NUM ${NUM}
+  uniform vec3  uSrc[NUM];
+  uniform float uP[NUM];
+  uniform float uOff[NUM];
+  uniform float uW[NUM];
+  uniform float uKr[NUM];
+  uniform float uDecay[NUM];
+  uniform float uAmp[NUM];
+  uniform float uTime;
+  uniform float uSpeed;
+  uniform float uEps;
+  void fieldParts(vec3 n, out float F, out float glow){
+    float env[NUM];
+    float psi[NUM];
+    for(int i=0;i<NUM;i++){
+      float d = clamp(dot(n, uSrc[i]), -1.0, 1.0);
+      float theta = acos(d);
+      float age = mod(uTime - uOff[i], uP[i]);
+      float thetaC = uSpeed * age;
+      float life = smoothstep(0.0,0.18,age)
+                 * exp(-uDecay[i]*age)
+                 * (1.0 - smoothstep(uP[i]-0.6, uP[i], age));
+      float dth = theta - thetaC;
+      float foc = 0.8 + 0.5*min(inversesqrt(sin(theta)+0.04), 3.0);
+      float e = uAmp[i]*foc*life*exp(-(dth*dth)/(uW[i]*uW[i]));  // packet envelope
+      env[i] = e;
+      psi[i] = e * cos(uKr[i]*dth);                              // signed wave
+    }
+    float lin  = psi[0] + psi[1] + psi[2];
+    // quadratic coupling: pairwise products = sum/difference sidebands
+    float bind = psi[0]*psi[1] + psi[0]*psi[2] + psi[1]*psi[2];
+    // conjunction intensity: bright only where two envelopes coincide
+    glow = env[0]*env[1] + env[0]*env[2] + env[1]*env[2];
+    F = lin + uEps*bind;
+  }
+`;
+
+const vertShader = fieldGLSL + `
+  varying float vF;
+  varying float vBind;
+  varying vec3  vViewN;
+  void main(){
+    vec3 n = normalize(position);
+    vec3 ref = abs(n.y) < 0.99 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0);
+    vec3 t1 = normalize(cross(ref, n));
+    vec3 t2 = cross(n, t1);
+    float eps = 0.008;
+    vec3 nA = normalize(n + eps*t1);
+    vec3 nB = normalize(n + eps*t2);
+    float F0,g0; fieldParts(n , F0,g0);
+    float FA,gA; fieldParts(nA, FA,gA);
+    float FB,gB; fieldParts(nB, FB,gB);
+    float R_ = ${R.toFixed(3)};
+    float g  = ${DISP.toFixed(4)};
+    vec3 p0 = n  * R_ * (1.0 + g*clamp(F0,-1.6,1.6));
+    vec3 pA = nA * R_ * (1.0 + g*clamp(FA,-1.6,1.6));
+    vec3 pB = nB * R_ * (1.0 + g*clamp(FB,-1.6,1.6));
+    vec3 newN = normalize(cross(pA-p0, pB-p0));
+    if(dot(newN, n) < 0.0) newN = -newN;
+    vViewN = normalize(normalMatrix * newN);
+    vF     = F0;
+    vBind  = g0;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p0, 1.0);
+  }
+`;
+
+const fragShader = `
+  precision highp float;
+  varying float vF;
+  varying float vBind;
+  varying vec3  vViewN;
+  float TANH(float x){ x=clamp(x,-8.0,8.0); float e=exp(2.0*x); return (e-1.0)/(e+1.0); }
+  vec3 cmap(float t){
+    t=clamp(t,-1.0,1.0);
+    if(t<0.0){float s=pow(-t,0.62);return vec3(s*0.01,s*0.04,s*0.70);}
+    if(t<0.30){float u=pow(t/0.30,1.8);return vec3(u*0.34,u*0.11,u*0.01);}
+    if(t<0.64){float u=(t-0.30)/0.34;return vec3(0.34+u*0.52,0.11+u*0.54,0.01);}
+    float u=(t-0.64)/0.36;return vec3(0.86+u*0.14,0.65+u*0.31,0.01+u*0.15);
+  }
+  void main(){
+    vec3 N = normalize(vViewN);
+    float limb = pow(abs(N.z), 0.42);
+    vec3 col = cmap(clamp(vF*${COLSCALE.toFixed(2)}, -1.0, 1.0));
+    float quiet = 1.0 - clamp(abs(vF)*${COLSCALE.toFixed(2)}, 0.0, 1.0);
+    col += vec3(0.015,0.025,0.085) * limb * quiet;
+    // lighting on the perturbed surface
+    vec3 L = normalize(vec3(0.35,0.55,1.0));
+    float diff = clamp(dot(N, L), 0.0, 1.0);
+    col *= 0.60 + 0.50*diff;
+    vec3 H = normalize(L + vec3(0.0,0.0,1.0));
+    float spec = pow(clamp(dot(N,H),0.0,1.0), 28.0);
+    col += spec * vec3(0.55,0.44,0.28) * 0.45 * clamp(abs(vF),0.0,1.0);
+    // --- BINDING MARKER: hot white-gold flare at genuine coincidences ---
+    float b = TANH(${BIND_GAIN.toFixed(2)} * max(vBind - ${BIND_THRESH.toFixed(2)}, 0.0));
+    col += b * vec3(1.0, 0.88, 0.55) * ${BIND_STR.toFixed(2)} * limb;
+    float rim = pow(1.0 - abs(N.z), 3.0);
+    col += rim * vec3(0.02,0.05,0.28);
+    col *= (0.22 + 0.78*limb);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const uniforms = {
+  uSrc:  {value: srcPos},
+  uP:    {value: srcP},
+  uOff:  {value: srcOff},
+  uW:    {value: srcW},
+  uKr:   {value: srcKr},
+  uDecay:{value: srcDec},
+  uAmp:  {value: srcAmp},
+  uTime: {value: 0.0},
+  uSpeed:{value: SPEED},
+  uEps:  {value: EPS},
+};
+
+const mat = new THREE.ShaderMaterial({vertexShader:vertShader, fragmentShader:fragShader, uniforms});
+const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, SEG, SEG), mat);
+sphere.rotation.x = 0.12;
+scene.add(sphere);
+
+/* ---------- halo shells ---------- */
+const makeHalo=(radius,power,alpha,r,g,b)=>{
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(radius,48,48),new THREE.ShaderMaterial({
+    vertexShader:`varying vec3 vVN;void main(){vVN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+    fragmentShader:`precision mediump float;varying vec3 vVN;void main(){float rim=1.0-abs(vVN.z);float a=pow(rim,${power.toFixed(1)})*${alpha.toFixed(2)};gl_FragColor=vec4(${r.toFixed(2)},${g.toFixed(2)},${b.toFixed(2)},a);}`,
+    transparent:true, blending:THREE.AdditiveBlending, side:THREE.BackSide, depthWrite:false,
+  })));
+};
+makeHalo(R+0.26, 2.5, 0.40, 0.01, 0.04, 0.50);
+makeHalo(R+0.66, 1.5, 0.12, 0.01, 0.02, 0.32);
+
+/* ---------- resize ---------- */
+function onResize(){
+  const W=window.innerWidth||300, H=window.innerHeight||300;
+  renderer.setSize(W,H,false);
+  camera.aspect=W/H;
+  const halfRad=(camera.aspect>=1)?Math.atan(FIT_R/CAM_Z):Math.atan(FIT_R/(camera.aspect*CAM_Z));
+  camera.fov=2*halfRad*(180/Math.PI);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+/* ---------- animation ---------- */
+const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const start = performance.now();
+const ROT_RATE = 2.0*Math.PI*ROT_TURNS_PER_LOOP/T_LOOP;
+function frame(){
+  const elapsed = (performance.now() - start) / 1000.0;
+  uniforms.uTime.value = elapsed;
+  sphere.rotation.y = elapsed * ROT_RATE;
+  renderer.render(scene, camera);
+  if(!reduceMotion) requestAnimationFrame(frame);
+}
+if(reduceMotion){ uniforms.uTime.value = 12.5; sphere.rotation.y = 12.5*ROT_RATE; renderer.render(scene, camera); }
+else { requestAnimationFrame(frame); }
+</script>
+</body>
+</html>
